@@ -58,6 +58,14 @@ Only use Chiron Stick on a machine whose owner has agreed. The owner types any p
 
 A step-by-step guide (`docs/INSTALL.md`) is coming. You'll need a 120 GB+ SSD in a USB 3 enclosure and a Linux PC that can run virtual machines (KVM). Chiron Stick is built on Linux Mint 22.3 Xfce.
 
+The build is scripted in `setup/`, one script per step. Each script has a `--dry-run` mode that only prints what it would do:
+
+1. `sudo setup/00-host-prep.sh <drive-serial>`: prepare a Fedora host
+2. `setup/01-get-mint-iso.sh`: download and verify the Mint ISO
+3. `setup/02-create-vm.sh /dev/disk/by-id/usb-... <drive-serial>`: create the build VM with the SSD passed through
+
+Find your drive's serial with `lsblk -o NAME,SIZE,MODEL,SERIAL,TRAN`.
+
 > ⚠️ **The setup erases the target disk.** The scripts check the disk (USB connection, size, model and serial) and make you type `yes`, but picking the wrong disk destroys its data. Read every prompt.
 
 ## License

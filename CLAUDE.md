@@ -198,9 +198,9 @@ Each phase has tasks and a **Done when** list. Claude Code must show the evidenc
 
 ### Phase 1 — Host preparation
 - Confirm virtualization: `/dev/kvm` exists and `grep -Ec '(vmx|svm)' /proc/cpuinfo` > 0
-- Install virtualization packages (verify names on the current Fedora): `virt-manager`, `virt-install`, `qemu-kvm`, `libvirt`, `edk2-ovmf`. Enable `libvirtd`.
-- Download the **Linux Mint 22.3 Xfce 64-bit** ISO from an official mirror, plus `sha256sum.txt` and `sha256sum.txt.gpg`. Verify the GPG signature with the Linux Mint signing key (follow Mint's official verification guide), then verify the ISO checksum.
-- Create VM `chiron-build` (`qemu:///system`):
+- Install virtualization packages (verify names on the current Fedora): `virt-manager`, `virt-install`, `virt-viewer`, `qemu-kvm`, `libvirt-daemon-kvm`, `edk2-ovmf`, `python3-virt-firmware`. Fedora uses libvirt's modular daemons (`virtqemud`, `virtnetworkd`, …), not `libvirtd`. Add the user to the `libvirt` group and add a udev rule so the host never automounts the target (script: `setup/00-host-prep.sh`).
+- Download the **Linux Mint 22.3 Xfce 64-bit** ISO from an official mirror, plus `sha256sum.txt` and `sha256sum.txt.gpg`. Verify the GPG signature with the Linux Mint signing key (follow Mint's official verification guide), then verify the ISO checksum (script: `setup/01-get-mint-iso.sh`). Keep the ISO in `/var/lib/libvirt/boot/chiron/`: the VM can't read files in a home folder.
+- Create VM `chiron-build` (`qemu:///system`, script: `setup/02-create-vm.sh`):
   - q35 machine, **UEFI with Secure Boot enabled and Microsoft keys enrolled**
   - Check the enrolled keys include both Microsoft UEFI CA 2011 and 2023 (e.g. `virt-fw-vars --print` on the VM's vars file), so both boot paths can be tested
   - 4 GiB RAM (less if the host has under 8 GiB), 2–4 vCPUs, NAT network
@@ -237,12 +237,12 @@ Claude Code gives Tete this checklist, then waits.
 
 Inside the VM the target is simply the VM's only disk (e.g. `/dev/sda`).
 
-1. **Updates:** `sudo apt update && sudo apt full-upgrade`. Make sure the newest HWE kernel is installed (`linux-generic-hwe-24.04` or Mint's Update Manager). Show `uname -r`.
+1. **Updates:** first save the pinned shim (step 4, second bullet), so an upgrade can't replace it before it's copied. Then `sudo apt update && sudo apt full-upgrade`. Make sure the newest HWE kernel is installed (`linux-generic-hwe-24.04` or Mint's Update Manager). Show `uname -r`.
 2. **Snapshot:** first check for a `/swapfile` the installer may have created and remove it with its `/etc/fstab` line (an active swapfile inside `@` blocks btrfs snapshots; zram replaces it in step 8). Then Timeshift in btrfs mode, with `@home` **not** included (so `chiron forget` really forgets) → snapshot `base-install`.
 3. **Generic initramfs:** confirm `MODULES=most` in `/etc/initramfs-tools/initramfs.conf` and no override in `conf.d/`.
 4. **Removable UEFI path with the pinned shim, no firmware writes** (decision 3):
    - Find the exact debconf keys with `sudo debconf-show grub-efi-amd64-signed` (and `grub-efi-amd64`). Set `grub2/update_nvram` = false and `grub2/force_efi_extra_removable` = false, then reconfigure GRUB.
-   - Check who signed the installed shim: `sbverify --list /boot/efi/EFI/ubuntu/shimx64.efi` (package `sbsigntool`). If it's **Microsoft Corporation UEFI CA 2011**, save a copy as the pinned shim in `/usr/local/share/chiron/shim-2011/` with its SHA256 and the `shim-signed` version. If apt already installed a 2023-signed shim, stop and ask Tete (the last 2011-signed `shim-signed` package can be fetched from the Ubuntu archive and verified).
+   - Check who signed the installed shim: `sbverify --list /boot/efi/EFI/ubuntu/shimx64.efi` (package `sbsigntool`). If it's **Microsoft Corporation UEFI CA 2011**, save a copy as the pinned shim in `/usr/local/share/chiron/shim-2011/` with its SHA256 and the `shim-signed` version. If apt already installed a 2023-signed shim, use `EFI/boot/bootx64.efi` from the verified Mint 22.3 ISO instead (shim 15.8, signed via Microsoft Corporation UEFI CA 2011, checked 2026-10-03).
    - Install `/usr/local/sbin/chiron-efi-sync` plus an APT hook (`/etc/apt/apt.conf.d/99-chiron-efi`, `DPkg::Post-Invoke`). It makes `EFI/BOOT/` contain exactly: the pinned shim as `BOOTX64.EFI` (hash checked), the current `grubx64.efi` and `mmx64.efi` from `EFI/ubuntu/`, and **no** `fbx64.efi`. It logs every change.
    - Test: boot the VM with **fresh firmware variables** (no saved boot entries). It must boot via the removable path with Secure Boot on. Also boot `EFI/ubuntu/shimx64.efi` once from the firmware boot menu.
 5. **Legacy BIOS boot:** `sudo apt install grub-pc-bin`, then `sudo grub-install --target=i386-pc <disk>`. Add an APT hook that re-runs this when `grub-pc-bin` is upgraded; the hook must find the disk from `/boot`'s parent device, not a hard-coded name. Test with a separate throwaway VM using SeaBIOS (legacy BIOS) and the same disk, only while `chiron-build` is shut down. Don't set the `pmbr_boot` flag unless a real BIOS-only PC refuses to boot (it can confuse some UEFI firmware).
