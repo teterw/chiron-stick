@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Chiron Stick: never automount drives or media (CLAUDE.md decision 7).
+     Per-user setting: Mint's defaults (mint-artwork, first in XDG_CONFIG_DIRS) turn automount on,
+     and only user settings override them. -->
+<channel name="thunar-volman" version="1.0">
+  <property name="automount-drives" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="automount-media" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+</channel>

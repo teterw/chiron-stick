@@ -1,0 +1,5 @@
+// Chiron Stick: after every dpkg run, keep the removable EFI path and legacy-BIOS GRUB right.
+DPkg::Post-Invoke {
+  "if [ -x /usr/local/sbin/chiron-efi-sync ]; then /usr/local/sbin/chiron-efi-sync || echo 'WARNING: chiron-efi-sync failed' >&2; fi";
+  "if [ -x /usr/local/sbin/chiron-bios-grub ]; then /usr/local/sbin/chiron-bios-grub || echo 'WARNING: chiron-bios-grub failed' >&2; fi";
+};

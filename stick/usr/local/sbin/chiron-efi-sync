@@ -1,0 +1,38 @@
+#!/bin/sh
+# Keep the removable boot path EFI/BOOT on the stick's ESP in the Chiron Stick layout (CLAUDE.md decision 3):
+#   BOOTX64.EFI             = the pinned Microsoft-2011-signed shim (boots on the most PCs)
+#   grubx64.efi, mmx64.efi  = current copies from EFI/ubuntu, so GRUB security fixes still apply
+#   fbx64.efi               = never: shim's fallback would write boot entries into the owner's firmware
+# Runs after every dpkg run (APT hook 99-chiron-boot) and by hand. Prints and logs every change.
+set -eu
+ESP=/boot/efi
+SRC=$ESP/EFI/ubuntu
+DST=$ESP/EFI/BOOT
+PIN=/usr/local/share/chiron/shim-2011
+
+log() { echo "chiron-efi-sync: $*"; logger -t chiron-efi-sync -- "$*" 2>/dev/null || true; }
+
+mountpoint -q "$ESP" || { log "$ESP is not mounted, nothing to do"; exit 0; }
+[ -f "$PIN/shimx64.efi" ] || { log "ERROR: pinned shim missing in $PIN"; exit 1; }
+( cd "$PIN" && sha256sum --check --quiet shimx64.efi.sha256 ) || { log "ERROR: pinned shim doesn't match its SHA256"; exit 1; }
+for f in grubx64.efi mmx64.efi; do
+  [ -f "$SRC/$f" ] || { log "ERROR: $SRC/$f missing"; exit 1; }
+done
+
+mkdir -p "$DST"
+put() {  # put <source> <target>: copy only when different, via a temporary name
+  if ! cmp -s "$1" "$2"; then
+    cp "$1" "$2.chiron-new"; sync
+    mv "$2.chiron-new" "$2"; sync
+    log "updated $2"
+  fi
+}
+put "$PIN/shimx64.efi" "$DST/BOOTX64.EFI"
+put "$SRC/grubx64.efi" "$DST/grubx64.efi"
+put "$SRC/mmx64.efi" "$DST/mmx64.efi"
+
+find "$DST" -maxdepth 1 -iname 'fbx64.efi' | while read -r f; do
+  rm -f "$f"; sync
+  log "removed $f (shim fallback)"
+done
+exit 0

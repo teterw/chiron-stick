@@ -1,0 +1,24 @@
+#!/bin/sh
+# Chiron Stick wrapper for grub-install, put in place with dpkg-divert by setup/10-base-config.sh.
+#
+# Ubuntu's grub-install writes firmware boot entries (NVRAM) and copies the shim fallback
+# (fbx64.efi) into EFI/BOOT unless told not to, and the shim/GRUB package scripts never tell it.
+# On someone else's PC that would leave traces in their firmware (CLAUDE.md decisions 3 and 7),
+# so EFI installs always get --no-nvram --no-extra-removable. EFI/BOOT is kept by chiron-efi-sync.
+REAL=/usr/sbin/grub-install.real
+
+efi=0
+case " $* " in
+  *" --target=i386-pc "* | *" --target i386-pc "*) efi=0 ;;
+  *" --target=x86_64-efi "* | *" --target x86_64-efi "* | *" --target=i386-efi "* | *" --target i386-efi "*) efi=1 ;;
+  *" --target"*) efi=0 ;;
+  *) [ -d /sys/firmware/efi ] && efi=1 ;;  # no --target: grub-install picks the running platform
+esac
+
+if [ "$efi" = 1 ]; then
+  case " $* " in
+    *" --removable "*) exec "$REAL" --no-nvram "$@" ;;  # --removable and --no-extra-removable can't be combined
+    *) exec "$REAL" --no-nvram --no-extra-removable "$@" ;;
+  esac
+fi
+exec "$REAL" "$@"

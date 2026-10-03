@@ -1,0 +1,26 @@
+#!/bin/sh
+# Keep legacy-BIOS GRUB installed on the stick's own disk (the one holding /boot), so BIOS-only PCs
+# can boot it too. Finds the disk at run time, because its device name differs from PC to PC, and
+# reinstalls only when GRUB's i386-pc files changed (or with --force).
+set -eu
+STAMP=/var/lib/chiron/bios-grub.stamp
+KERNEL_IMG=/usr/lib/grub/i386-pc/kernel.img
+BIOS_BOOT_TYPE=21686148-6449-6e6f-744e-656564454649
+
+log() { echo "chiron-bios-grub: $*"; logger -t chiron-bios-grub -- "$*" 2>/dev/null || true; }
+
+[ -f "$KERNEL_IMG" ] || { log "grub-pc-bin isn't installed, nothing to do"; exit 0; }
+src=$(findmnt -no SOURCE /boot) || { log "ERROR: /boot isn't mounted"; exit 1; }
+disk=/dev/$(lsblk -no PKNAME "$src" | head -n1)
+[ -b "$disk" ] || { log "ERROR: can't find the disk behind /boot ($src)"; exit 1; }
+lsblk -no PARTTYPE "$disk" | grep -qix "$BIOS_BOOT_TYPE" || { log "ERROR: $disk has no BIOS boot partition"; exit 1; }
+
+new=$(sha256sum "$KERNEL_IMG" | cut -d' ' -f1)
+old=$(cat "$STAMP" 2>/dev/null || true)
+if [ "$new" = "$old" ] && [ "${1:-}" != --force ]; then
+  exit 0
+fi
+grub-install --target=i386-pc "$disk"
+mkdir -p "$(dirname "$STAMP")"
+echo "$new" > "$STAMP"
+log "installed BIOS GRUB on $disk"
