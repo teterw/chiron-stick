@@ -4,6 +4,16 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-04
+
+Phase 2: Linux Mint 22.3 Xfce is installed on the SSD (UEFI + BIOS boot partitions, encrypted btrfs root) and boots in the VM with Secure Boot enabled.
+
+### Fixed
+- `setup/02-create-vm.sh`: keep the ISO attached and boot it first across restarts (`--import` with the ISO as a CD drive). With `--cdrom`, virt-install dropped the ISO after the first boot, so a restart during the install had nothing to boot.
+
+### Docs
+- Phase 2 checklist: choose each partition's "Use as" when creating it (changing it later can leave the EFI partition unformatted and freeze the installer), how to recover, and leave "Encrypt my home folder" unticked
+
 ## [0.1.0] - 2026-10-03
 
 Phase 1: the build host and VM are ready. The VM boots the Linux Mint 22.3 live ISO with Secure Boot enabled.

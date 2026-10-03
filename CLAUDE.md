@@ -226,9 +226,11 @@ Claude Code gives Tete this checklist, then waits.
    4. 105000 MB → *Use as:* **physical volume for encryption** → enter the passphrase (Tete chooses it and writes it down offline)
    5. Select the new `…_crypt` volume at the top of the list → **btrfs**, mount point **/**
    6. Leave the remaining ~13 GB as **free space**
+
+   Pick **Use as** in the **+** (create) dialog. Changing a partition's type later with **Change…** can leave the EFI partition unformatted: the install then stops with "mount vfat … /boot/efi failed" and the installer freezes. If that happens, restart the live session, run `sudo mkfs.vfat -F 32 /dev/sda1` (and `sudo wipefs -a /dev/sda2` if the BIOS boot area shows a filesystem), then set the partitions up again with **Format** ticked on `/boot`. Before **Install Now**, check `/var/lib/partman/devices/*/*/format` exists for every partition that must be formatted.
 7. Device for boot loader installation: the ~120 GB disk.
-8. Timezone: Bangkok. Username and hostname from `CLAUDE.local.md`. Require a password to log in.
-9. Finish → restart → Claude Code detaches the ISO → unlock with the passphrase → log in.
+8. Timezone: Bangkok. Username and hostname from `CLAUDE.local.md`. Require a password to log in. Leave **Encrypt my home folder** unticked: the whole disk is already encrypted.
+9. Finish → restart → Claude Code ejects the ISO (`virsh change-media chiron-build sdb --eject --live --config`; if the live session ignores the restart, power-cycle the VM) → unlock with the passphrase → log in.
 
 **Done when:** the installed system boots in the VM with Secure Boot on · `lsblk -f` matches the layout · `sudo parted <disk> unit GiB print free` shows ~12 GiB free at the end.
 

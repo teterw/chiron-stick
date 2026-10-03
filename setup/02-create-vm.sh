@@ -26,14 +26,17 @@ for d in $($V list --name); do
   fi
 done
 
+# --import keeps this exact config: the ISO stays attached and boots first across restarts
+# (with --cdrom, virt-install drops the ISO from the saved config after the first boot).
+# Phase 2 ejects the ISO once Mint is installed.
 run virt-install --connect qemu:///system --name "$VM" --osinfo ubuntu24.04 \
   --memory "${VM_MEMORY_MB:-4096}" --vcpus "${VM_VCPUS:-4}" --machine q35 \
-  --boot firmware=efi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=yes,firmware.feature1.name=enrolled-keys,firmware.feature1.enabled=yes \
+  --boot cdrom,hd,firmware=efi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=yes,firmware.feature1.name=enrolled-keys,firmware.feature1.enabled=yes \
   --disk "path=$DEV,bus=sata,cache=none,io=native,discard=unmap" \
-  --cdrom "$ISO" \
+  --disk "path=$ISO,device=cdrom,bus=sata,readonly=on" \
   --network network=default,model=virtio \
   --graphics spice \
-  --noautoconsole
+  --import --noautoconsole
 
 [ "$DRY_RUN" = 1 ] && exit 0
 echo "== Check: Secure Boot firmware and disk source =="
