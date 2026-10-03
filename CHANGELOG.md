@@ -4,7 +4,13 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-04
+
+Phases 3, 4 and 6 done, and the `chiron` tool works in the build VM. The stick boots on fresh UEFI firmware (Secure Boot on, no boot entries) and on legacy BIOS; MemTest86 runs from its boot menu with Secure Boot on.
+
 ### Added
+- Phase 6, `setup/40-memtest86.sh`: MemTest86 Free in the boot menu (UEFI). Downloaded by each builder (its licence grants no redistribution) and checked against Microsoft's UEFI CA 2011 signature, since no checksum is published
+- `setup/12-boot-tests.sh`: boots the stick in throwaway VMs with fresh UEFI (Secure Boot) firmware and with legacy BIOS
 - Phase 3, `setup/10-base-config.sh`: pinned 2011-signed shim on the removable path, `grub-install` wrapper (no NVRAM writes, no `fbx64.efi`), legacy-BIOS GRUB, no os-prober, efi-pstore off, no RAID/LVM auto-start, chrony without `rtcsync`, no automount, zram, Timeshift snapshots
 - Phase 4, `setup/20-toolkit.sh`: the diagnostic tools (installed without recommends; smartd masked; smoke test)
 - Phase 5, the `chiron` tool (v0.3.0): `report`, `stress`, `full`, `compare`, `mount-ro`/`umount`, `forget`, `help`
