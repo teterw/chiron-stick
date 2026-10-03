@@ -1,0 +1,16 @@
+# Private: never commit
+CLAUDE.local.md
+PROGRESS.md
+
+# Reports and anything about an owner's machine
+reports/
+
+# Downloaded at build time, not ours to redistribute
+walls/
+memtest86/
+*.iso
+
+# Secrets
+.env
+*.key
+*.pem
