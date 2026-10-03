@@ -1,0 +1,630 @@
+{
+ "release": "25H2",
+ "fetched": "2026-10-04",
+ "note": "Microsoft's official Windows 11 supported processor lists (by series).",
+ "sources": [
+  "https://learn.microsoft.com/en-us/windows-hardware/design/minimum/supported/windows-11-25h2-supported-intel-processors",
+  "https://learn.microsoft.com/en-us/windows-hardware/design/minimum/supported/windows-11-25h2-supported-amd-processors"
+ ],
+ "vendors": {
+  "intel": [
+   {
+    "product": "Intel Atom",
+    "series": "Atom X7000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron 3000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron 4000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron 5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron 6000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron 7000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron G4000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron G5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron G6000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron J4000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron N4000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Celeron",
+    "series": "Celeron N5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "10th Generation Core i3 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "10th Generation Core i5 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "10th Generation Core i7 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "10th Generation Core i9 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "11th Generation Core i3 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "11th Generation Core i5 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "11th Generation Core i7 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "11th Generation Core i9 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "12th Generation Core i3 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "12th Generation Core i5 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "12th Generation Core i7 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "12th Generation Core i9 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "13th Generation Core i3 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "13th Generation Core i5 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "13th Generation Core i7 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "13th Generation Core i9 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "8th Generation Core i3 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "8th Generation Core i5 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "8th Generation Core i7 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "8th Generation Core i9 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "8th Generation Core m Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "9th Generation Core i3 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "9th Generation Core i5 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "9th Generation Core i7 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "9th Generation Core i9 Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "Core i3 Processors (14th Generation)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "Core i5 processors (14th Generation)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "Core i7 processors (14th Generation)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "Core i9 processors (14th Generation)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "Core Processor N300 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "Core Processors (Series 1)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core",
+    "series": "Core Processors (Series 2)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core Ultra",
+    "series": "Core Ultra Processors (Series 1)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core Ultra",
+    "series": "Core Ultra Processors (Series 2)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Core Ultra",
+    "series": "Core Ultra Processors (Series 3)",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium 6800 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold 4000U Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold 4000Y Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold 5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold 6000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold 6000Y Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold 7000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold 8000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold G5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Gold G7000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Silver J5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Pentium",
+    "series": "Pentium Silver N6000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Processor",
+    "series": "Intel 300 Processor for Desktop",
+    "exception": ""
+   },
+   {
+    "product": "Intel Processor",
+    "series": "N100 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Processor",
+    "series": "N200 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Processor",
+    "series": "N90 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Processor",
+    "series": "U300 series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-2400 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-2500 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-3400 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-3500 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon Scalable Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "2nd Generation Xeon Scalable Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "3rd Generation Xeon Scalable Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "4th Generation Xeon Scalable Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "5th Generation Xeon Scalable Processors",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon D-1700 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon D-1800 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon D-2700 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon D-2800 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon E-2100 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon E-2200 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon E-2300 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon E-2400 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-10000M Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-11000M Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-1200 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-1300 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon",
+    "series": "Xeon W-3300 Series",
+    "exception": ""
+   },
+   {
+    "product": "Intel Xeon 600",
+    "series": "Xeon 600 Processors for Workstation",
+    "exception": ""
+   }
+  ],
+  "amd": [
+   {
+    "product": "Athlon",
+    "series": "7000 U Series",
+    "exception": "All except U Series"
+   },
+   {
+    "product": "EPYC",
+    "series": "4004 Series",
+    "exception": ""
+   },
+   {
+    "product": "EPYC",
+    "series": "4005 Series",
+    "exception": ""
+   },
+   {
+    "product": "EPYC",
+    "series": "7003 Series",
+    "exception": ""
+   },
+   {
+    "product": "EPYC",
+    "series": "8004 Series",
+    "exception": ""
+   },
+   {
+    "product": "EPYC",
+    "series": "9004 Series",
+    "exception": ""
+   },
+   {
+    "product": "EPYC",
+    "series": "9005 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "10 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "100 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "200 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "AI 300 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "AI Max 300 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "AI Z2 Extreme",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "Z1 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "Z2 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "3000 Series",
+    "exception": "G & GE"
+   },
+   {
+    "product": "Ryzen",
+    "series": "4000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "6000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "7000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "8000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen",
+    "series": "9000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen PRO",
+    "series": "3000 Series",
+    "exception": "G & GE"
+   },
+   {
+    "product": "Ryzen PRO",
+    "series": "4000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen PRO",
+    "series": "5000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen PRO",
+    "series": "6000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen PRO",
+    "series": "7000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen PRO",
+    "series": "8000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen PRO",
+    "series": "9000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen Threadripper",
+    "series": "3000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen Threadripper",
+    "series": "7000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen Threadripper",
+    "series": "9000 Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen Threadripper PRO",
+    "series": "3000 WX-Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen Threadripper PRO",
+    "series": "5000 WX-Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen Threadripper PRO",
+    "series": "7000 WX-Series",
+    "exception": ""
+   },
+   {
+    "product": "Ryzen Threadripper PRO",
+    "series": "9000 WX-Series",
+    "exception": ""
+   }
+  ]
+ }
+}

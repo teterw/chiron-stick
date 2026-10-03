@@ -4,6 +4,17 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+### Added
+- Phase 3, `setup/10-base-config.sh`: pinned 2011-signed shim on the removable path, `grub-install` wrapper (no NVRAM writes, no `fbx64.efi`), legacy-BIOS GRUB, no os-prober, efi-pstore off, no RAID/LVM auto-start, chrony without `rtcsync`, no automount, zram, Timeshift snapshots
+- Phase 4, `setup/20-toolkit.sh`: the diagnostic tools (installed without recommends; smartd masked; smoke test)
+- Phase 5, the `chiron` tool (v0.3.0): `report`, `stress`, `full`, `compare`, `mount-ro`/`umount`, `forget`, `help`
+  - Checks: system, battery, storage (SMART, temperature, read-only speed test), memory, CPU (against its own Tjmax), sensors, kernel hardware errors, device support (works / no driver here / driver errors), free space on the PC's own OSes (read-only mounts), Windows 11 readiness, Secure Boot certificates, firmware updates (read-only)
+  - Owner summary in Thai and English; technical report as Markdown, HTML and JSON; per-machine history with salted fingerprints
+  - Windows 11 CPU check against Microsoft's 25H2 supported-processor lists (`tools/update-win11-cpus.py` refreshes them)
+  - Unit tests for the grading logic; opt-in smoke tests (`CHIRON_SMOKE=1`)
+- `setup/30-chiron.sh`: installs the tool to `/opt/chiron` and the `chiron` command
+- `docs/USAGE.md`: consent checklist, boot keys by brand, commands, leaving without a trace
+
 ## [0.2.0] - 2026-10-04
 
 Phase 2: Linux Mint 22.3 Xfce is installed on the SSD (UEFI + BIOS boot partitions, encrypted btrfs root) and boots in the VM with Secure Boot enabled.

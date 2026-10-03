@@ -14,3 +14,7 @@ memtest86/
 .env
 *.key
 *.pem
+
+# Python build leftovers
+__pycache__/
+*.pyc

@@ -4,11 +4,11 @@ A portable Linux "PC doctor" on a USB SSD. Plug it into a PC or laptop (with the
 
 Named after Chiron, the wise centaur of Greek myth, a healer and teacher.
 
-> **Status:** in development. Not ready to use yet.
+> **Status:** in development. The stick boots with Secure Boot and the health-check commands work; the desktop theme and real-hardware testing are still to come.
 
 ## The `chiron` command
 
-Everything Chiron Stick adds is one command, `chiron`. Commands are added as they're built.
+Everything Chiron Stick adds is one command, `chiron`. The `rice` and `walls` commands arrive with the desktop theme.
 
 | Command | What it does |
 |---|---|
@@ -60,11 +60,23 @@ A step-by-step guide (`docs/INSTALL.md`) is coming. You'll need a 120 GB+ SSD in
 
 The build is scripted in `setup/`, one script per step. Each script has a `--dry-run` mode that only prints what it would do:
 
-1. `sudo setup/00-host-prep.sh <drive-serial>`: prepare a Fedora host
+On the Fedora host:
+
+1. `sudo setup/00-host-prep.sh <drive-serial>`: prepare the host
 2. `setup/01-get-mint-iso.sh`: download and verify the Mint ISO
 3. `setup/02-create-vm.sh /dev/disk/by-id/usb-... <drive-serial>`: create the build VM with the SSD passed through
+4. Install Mint in the VM by hand (the checklist is in `CLAUDE.md`, Phase 2)
 
-Find your drive's serial with `lsblk -o NAME,SIZE,MODEL,SERIAL,TRAN`.
+On the stick (in the VM, as root, from a copy of this repo):
+
+5. `setup/10-base-config.sh`: boot safety (pinned Secure Boot shim, no firmware or clock writes, no os-prober, no automount), updates, snapshots
+6. `setup/20-toolkit.sh`: the diagnostic tools
+7. `setup/30-chiron.sh`: the `chiron` command
+8. `setup/40-memtest86.sh`: MemTest86 in the boot menu (downloaded and signature-checked; never redistributed)
+
+Back on the host: `setup/12-boot-tests.sh` boots the stick in fresh UEFI (Secure Boot) and legacy-BIOS test VMs.
+
+Find your drive's serial with `lsblk -o NAME,SIZE,MODEL,SERIAL,TRAN`. How to use the finished stick: [docs/USAGE.md](docs/USAGE.md).
 
 > ⚠️ **The setup erases the target disk.** The scripts check the disk (USB connection, size, model and serial) and make you type `yes`, but picking the wrong disk destroys its data. Read every prompt.
 
