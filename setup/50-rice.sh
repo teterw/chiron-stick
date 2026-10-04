@@ -133,6 +133,9 @@ update-alternatives --install /usr/share/plymouth/themes/default.plymouth defaul
 update-alternatives --set default.plymouth "$P/chiron.plymouth"
 update-initramfs -u -k all 2>&1 | tail -n 2
 
+# The constellation as the app icon (Chiron Doctor, the polkit dialog)
+install -D -m 0644 "$W/assets/logo.png" /usr/share/icons/hicolor/256x256/apps/chiron.png
+gtk-update-icon-cache -q -f /usr/share/icons/hicolor || true
 install -d /usr/share/backgrounds/chiron
 install -m 0644 "$W/assets/login.png" /usr/share/backgrounds/chiron/login.png
 # The login screen's own theme: adw-gtk3-dark with Chiron violet instead of its default blue

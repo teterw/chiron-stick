@@ -38,10 +38,13 @@ If the PC refuses to boot the stick with a Secure Boot error:
 
 ## 3. Check the PC
 
-Open a terminal and run:
+The easiest way: click **Chiron Doctor** in the dock (or the menu). Each check is a star in a constellation; it lights up green, amber or red as its results come in, and the centre shows the progress, the CPU's temperature during the stress test, then the verdict. Click a star to see what it found. Choose **Health check** (about 3 minutes, reads only), **Quick check**, **Stress test** or **Check + stress**; the first one asks for your password in the system's own window, then remembers it for a few minutes. **Stop** ends a test safely, and so does closing the window. At the end, **Owner summary** opens the one-page summary for the owner.
+
+Or in a terminal:
 
 | Command | What it does |
 |---|---|
+| `chiron doctor` | The Chiron Doctor window (`--demo` plays a made-up run, nothing measured) |
 | `chiron report` | Read-only health check, about 3 minutes |
 | `chiron full` | Report + stress tests + one combined verdict (laptop on the charger) |
 | `chiron stress --minutes 10` | Only the load tests. Ctrl-C stops them safely |

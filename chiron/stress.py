@@ -60,7 +60,7 @@ def grade_cpu(max_temp, tjmax, drop, throttles, aborted):
     return Status.GREEN
 
 
-def cpu_load(ctx, minutes, progress):
+def cpu_load(ctx, minutes, progress, emit=None):
     if not have("stress-ng"):
         return [Result("cpu_load", "CPU under load", Status.NA, "stress-ng isn't installed")]
     tjmax = cpu_temp(readings()[0])[1] or default_tjmax(cpu_model())
@@ -89,6 +89,8 @@ def cpu_load(ctx, minutes, progress):
             if bstatus == "Discharging" and bcap is not None and bcap < MIN_BATTERY_PCT:
                 aborted = "battery"
                 break
+            if emit:
+                emit("tick", id="cpu_load", t=t, total=int(minutes * 60), temp=temp, tjmax=tjmax, mhz=mhz)
             if t % 15 == 0:
                 progress(f"  {t:4d}s  CPU {temp if temp is not None else '?'} °C (limit {tjmax})  {mhz or '?'} MHz")
     except KeyboardInterrupt:
@@ -113,7 +115,7 @@ def cpu_load(ctx, minutes, progress):
     status = grade_cpu(max_temp, tjmax, drop, throttles, aborted)
     reason = {"temp": f"stopped: CPU above its {tjmax} °C limit for over {OVER_LIMIT_SECONDS} s",
               "battery": f"stopped: battery below {MIN_BATTERY_PCT}% (plug the charger in)",
-              "ctrl-c": "stopped with Ctrl-C"}.get(aborted)
+              "ctrl-c": "stopped on request"}.get(aborted)
     if aborted in ("battery", "ctrl-c"):
         status = Status.NA
     parts = [f"{len(samples)} s of full load", f"max {max_temp} °C (limit {tjmax} °C)" if max_temp is not None else "no CPU temperature sensor"]
@@ -188,26 +190,45 @@ def gpu_test(ctx):
     return Result("gpu", "Graphics", Status.GREEN, f"{renderer}: score {score}", ev, ("gpu.green", {}))
 
 
-def stress(ctx, minutes=10, gpu=True, ram=True, progress=print):
-    """Run the load tests. Returns a list of Results."""
+STEPS = {"cpu_load": "CPU under load", "ram": "RAM test", "gpu": "Graphics test"}
+
+
+def steps(gpu=True, ram=True):
+    """The stress run's steps, as the doctor launcher shows them."""
+    return [k for k in STEPS if k == "cpu_load" or (k == "ram" and ram) or (k == "gpu" and gpu)]
+
+
+def stress(ctx, minutes=10, gpu=True, ram=True, progress=print, emit=None):
+    """Run the load tests. Returns a list of Results. emit(kind, **data): events for the
+    launcher (chiron/events.py): check/result per step, tick every second of CPU load."""
+    emit = emit or (lambda *a, **k: None)
+
+    def done(step, results):
+        for r in results:
+            emit("result", id=step, result=r.to_dict())
+        return results
+
     bstatus, bcap = battery_state()
     if bstatus == "Discharging" and bcap is not None and bcap < MIN_BATTERY_PCT:
-        return [Result("cpu_load", "CPU under load", Status.NA,
-                       f"not started: battery at {bcap}% (plug the charger in for the stress test)")]
+        return done("cpu_load", [Result("cpu_load", "CPU under load", Status.NA,
+                                        f"not started: battery at {bcap}% (plug the charger in for the stress test)")])
     if bstatus == "Discharging":
         progress("  note: running on battery; plug the charger in for a fair test (stops below 25%)")
     paused = rice.pause()
     try:
         progress(f"  CPU: {minutes} min at full load (Ctrl-C stops it safely)")
-        results = cpu_load(ctx, minutes, progress)
+        emit("check", id="cpu_load")
+        results = done("cpu_load", cpu_load(ctx, minutes, progress, emit))
         if results[0].evidence.get("aborted") == "ctrl-c":
             return results  # the person wants to stop: don't start the next tests
         if ram:
             progress("  RAM: memtester quick pass")
-            results.append(ram_test(ctx))
+            emit("check", id="ram")
+            results += done("ram", [ram_test(ctx)])
         if gpu:
             progress("  GPU: glmark2 short run")
-            results.append(gpu_test(ctx))
+            emit("check", id="gpu")
+            results += done("gpu", [gpu_test(ctx)])
         return results
     finally:
         if paused:

@@ -32,4 +32,8 @@ else
   chmod 0755 /usr/local/bin/chiron
   /usr/local/bin/chiron --version
 fi
-echo "Installed. Try: chiron help"
+echo "===== 4. The doctor launcher: password rule and menu entry"
+# pkexec asks once and remembers it for a few minutes (auth_admin_keep), only for /usr/local/bin/chiron
+run install -m 0644 "$REPO/stick/usr/share/polkit-1/actions/org.chironstick.chiron.policy" /usr/share/polkit-1/actions/
+run install -m 0644 "$REPO/stick/usr/share/applications/chiron-doctor.desktop" /usr/share/applications/
+echo "Installed. Try: chiron help, or Chiron Doctor in the menu"

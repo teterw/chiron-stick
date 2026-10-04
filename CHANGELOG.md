@@ -5,6 +5,8 @@ All notable changes to Chiron Stick are listed here.
 ## [Unreleased]
 
 ### Added
+- **Chiron Doctor** (`chiron doctor`, in the dock and the menu): every check from one window. Each check is a star in a constellation over a night sky made from your own wallpaper, in your theme's colours; a star lights up green, amber or red as its results come in, the centre ring fills, and during the stress test it shows the CPU's temperature and clock live with a temperature trace. Then the verdict, what changed since the last check, and the owner summary one click away. Click a star for its findings. The checks run as root through the system's password dialog (asked once, remembered a few minutes); Stop, or closing the window, ends a test safely
+- `chiron --events`: machine-readable progress (JSON lines) for report, stress and full; a `stop` line on stdin stops the run safely
 - **One password:** after the disk passphrase at boot, the desktop opens by itself (LightDM auto-login, `setup/50-rice.sh`). The screen locks after 10 minutes idle, on suspend and when the lid closes; `Super+L` locks it right away
 - **See-through terminal** like GNOME's Ptyxis: 85% opaque with desktop effects on. Bright wallpapers showing through can't make text hard to read: the terminal's colours are lightened until they keep the theme's contrast (7:1 text, 4.5:1 colours), and only if that can't work does the terminal get less see-through
 - **Soft window shadows**, GNOME-like: a small `Chiron-wm` window theme (Mint's Default with bigger shadows; xfwm4 only takes shadow sizes from a theme)

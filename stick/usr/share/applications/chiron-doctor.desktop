@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Chiron Doctor
+GenericName=PC health check
+Comment=Check this computer's health: battery, storage, memory, CPU and more
+Exec=chiron doctor
+Icon=chiron
+Categories=System;Monitor;
+Keywords=health;check;report;stress;diagnostic;
+Terminal=false
+StartupNotify=true

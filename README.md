@@ -12,6 +12,7 @@ Everything Chiron Stick adds is one command, `chiron`.
 
 | Command | What it does |
 |---|---|
+| `chiron doctor` | **Chiron Doctor**: every check from one window, as a star chart that lights up green, amber or red (also in the dock and the menu) |
 | `chiron report` | Read-only health check (about 3 minutes) |
 | `chiron stress [--minutes 10]` | Load tests with live safety limits |
 | `chiron full` | Report + stress tests + one combined verdict |

@@ -353,6 +353,7 @@ Tete decides the aesthetics. Claude Code proposes options and implements them, a
 Develop in a git repo in this folder (`./chiron/`). Deploy to `/opt/chiron` on the drive with rsync over SSH, with a wrapper at `/usr/local/bin/chiron`.
 
 **Commands**
+- `chiron doctor`: the doctor launcher, one window for every check (see *Doctor launcher* below)
 - `chiron report`: read-only health check, under ~3 minutes
 - `chiron stress [--minutes 10]`: load tests with live safety limits
 - `chiron full`: report + stress + combined verdict
@@ -424,6 +425,13 @@ CPU temperatures are graded against each CPU's own limit (Tjmax: coretemp `temp*
 **Read-only guarantees:** benchmarks on owner disks are read-only (`fio --readonly`). Never write test files to owner disks. Never mount read-write.
 
 **Implementation notes:** Python 3 standard library (`subprocess`, `json`, `pathlib`). Each check is its own module returning `{status, summary, evidence}`. Missing hardware or tools gives "n/a", not a crash (VMs and desktops have no battery).
+
+**Doctor launcher** (`chiron doctor`, 0.8.0; Tete asked for it "extremely cool and techy and very personalised" and picked look **A, Star chart** from a sheet of three):
+- Every step is a star on a wide ellipse over a night sky made from the person's own wallpaper (blurred, darkened, a fixed star field); the lines, the ring and the buttons use the desktop theme's accent; verdict colours stay fixed (decision 10). Greeting with the user name and time of day; the header shows the machine (DMI, readable without root) and the last check of this machine from `~/reports/*/report.json`.
+- Home: Health check / Quick check / Stress test / Check + stress. Running: the current star pulses, a finished one bursts into its colour, the ring fills; during the CPU load test the centre shows temperature, clock, time left and a temperature trace against the CPU's limit. Done: the verdict in the ring, the comparison with the last check, Owner summary / Full report / New check. Clicking a star shows all its findings.
+- Runs as the user; the checks run as root through `pkexec /usr/local/bin/chiron --events …` with polkit action `org.chironstick.chiron` (`auth_admin_keep`: asked once, remembered a few minutes; the password only ever goes to the system's dialog). polkit refuses processes outside the active desktop session (an SSH session, or anything restarted from one, e.g. `xfsettingsd --replace` run over SSH: then even the menu launches it there): test it from the desktop.
+- `chiron --events` (chiron/events.py): stdout carries only JSON lines (`start` with the planned steps, `check`, `result`, `tick` every second of CPU load, `log`, `done`, `stopped`); everything else, including tools' output, goes to stderr. A line `stop` on stdin, or stdin closing, raises KeyboardInterrupt in the main thread: the same safe stop as Ctrl-C (stress-ng killed, rice resumed, the report still written). The launcher can't signal a root process, and a launcher that dies never leaves a stress test running.
+- Drawn with cairo on the CPU; while a stress step runs it redraws 4 times a second, otherwise 30 while animating and not at all when idle. `chiron/doctor_model.py` (events → stars, no GTK, unit-tested), `chiron/doctor.py` (helpers, entry), `chiron/doctor_window.py` (drawing). `chiron doctor --demo` replays a scripted run for screenshots. Cairo arcs need `new_path()` after text: Pango leaves a current point and the arc otherwise draws a line from it.
 
 **Done when:** `chiron report` produces all report files in the VM (with "n/a" where hardware is absent), then on Tete's laptop with real hardware.
 
