@@ -1,0 +1,958 @@
+#!/usr/bin/env python3
+"""chiron-walls: the wallpaper picker (Super+W) and the animated wallpaper changes of the Chiron
+Stick desktop theme. Runs as the desktop user; the theme itself comes from chiron-rice.
+
+  chiron-walls pick                     full-screen picker: browse with a live preview of the theme
+                                        on the wallpaper, Enter applies it, Esc goes back
+  chiron-walls transition OLD NEW [FX]  animate the desktop from OLD to NEW behind the windows
+                                        (FX: grow, wipe, wave, fade or random); prints "ready" once
+                                        the old wallpaper covers the desktop
+
+Everything is drawn with cairo on the CPU, so it works without a GPU driver too. Pictures load in a
+background thread; the screen only redraws while something moves."""
+import math
+import random
+import sys
+import threading
+import time
+from collections import OrderedDict
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+from pathlib import Path
+
+try:
+    import cairo
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    gi.require_version("PangoCairo", "1.0")
+    from gi.repository import Gdk, GLib, Gtk, Pango, PangoCairo
+    from PIL import Image, ImageFilter, ImageOps
+except (ImportError, ValueError) as err:  # chiron-rice falls back to its rofi picker
+    print(f"chiron-walls: can't start ({err})", file=sys.stderr)
+    sys.exit(3)
+
+RICE = Path(__file__).resolve().parent
+_loader = SourceFileLoader("chiron_rice", str(RICE / "chiron-rice"))
+rice = module_from_spec(spec_from_loader("chiron_rice", _loader))
+_loader.exec_module(rice)
+
+FONT, MONO = "Noto Sans", "JetBrainsMono Nerd Font"
+
+
+# ---------------------------------------------------------------- animation helpers
+
+def clamp(v, lo=0.0, hi=1.0):
+    return max(lo, min(hi, v))
+
+
+def ease_out(t):
+    return 1 - (1 - t) ** 3
+
+
+def ease_in_out(t):
+    return 4 * t ** 3 if t < 0.5 else 1 - (-2 * t + 2) ** 3 / 2
+
+
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def lerp_rgb(a, b, t):
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+def mix_theme(a, b, t):
+    """Colours partway between two chiron-rice themes, for smooth recolouring."""
+    out = {k: lerp_rgb(a[k], b[k], t) for k in ("bg", "fg", "accent", "on_accent", "surface", "surface2", "muted")}
+    out["term"] = [lerp_rgb(x, y, t) for x, y in zip(a["term"], b["term"])]
+    return out
+
+
+class Tween:
+    """A value going from a to b over dur seconds."""
+
+    def __init__(self, a=0.0, b=1.0, dur=0.3, ease=ease_out):
+        self.a, self.b, self.dur, self.ease, self.t0 = a, b, max(dur, 1e-6), ease, time.monotonic()
+
+    def progress(self, now):
+        return clamp((now - self.t0) / self.dur)
+
+    def value(self, now):
+        return lerp(self.a, self.b, self.ease(self.progress(now)))
+
+    def done(self, now):
+        return now - self.t0 >= self.dur
+
+
+# ---------------------------------------------------------------- pictures
+
+def surface(im):
+    """PIL image -> cairo surface (cairo keeps premultiplied BGRA in memory on little-endian PCs)."""
+    im = im.convert("RGBA")
+    w, h = im.size
+    return cairo.ImageSurface.create_for_data(bytearray(im.tobytes("raw", "BGRa")), cairo.FORMAT_ARGB32, w, h, w * 4)
+
+
+def cover(path, w, h):
+    """The picture as xfdesktop's "zoomed" style shows it on a w x h screen: scaled to cover, centred."""
+    with Image.open(path) as im:
+        im.draft("RGB", (w, h))  # JPEG: decode at a reduced size straight away
+        return surface(ImageOps.fit(im.convert("RGB"), (w, h), Image.BILINEAR))
+
+
+def thumb(path):
+    t = rice.thumb_path(path)
+    with Image.open(t if t.exists() else path) as im:
+        im.draft("RGB", (320, 180))
+        return surface(ImageOps.fit(im.convert("RGB"), (320, 180), Image.BILINEAR))
+
+
+def blurred(path, w, h):
+    """A tiny blurred copy; cairo scales it up into a soft backdrop."""
+    t = rice.thumb_path(path)
+    with Image.open(t if t.exists() else path) as im:
+        im.draft("RGB", (320, 180))
+        small = ImageOps.fit(im.convert("RGB"), (max(16, w // 14), max(9, h // 14)), Image.BILINEAR)
+    return surface(small.filter(ImageFilter.GaussianBlur(2.2)))
+
+
+def theme_of(path):
+    try:
+        return rice.derive(rice.run_wallust(path))
+    except SystemExit:
+        return None
+
+
+def paint_scaled(cr, src, x, y, w, h, alpha=1.0, filt=cairo.FILTER_BILINEAR):
+    sw, sh = src.get_width(), src.get_height()
+    cr.save()
+    cr.translate(x, y)
+    cr.scale(w / sw, h / sh)
+    cr.set_source_surface(src, 0, 0)
+    cr.get_source().set_filter(filt)
+    cr.get_source().set_extend(cairo.EXTEND_PAD)
+    cr.paint_with_alpha(alpha)
+    cr.restore()
+
+
+def rrect(cr, x, y, w, h, r):
+    r = max(0.0, min(r, w / 2, h / 2))
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def text(cr, s, x, y, size, color, alpha=1.0, weight="", font=FONT, align="left", width=None):
+    layout = PangoCairo.create_layout(cr)
+    layout.set_font_description(Pango.FontDescription(f"{font} {weight} {size:.1f}px"))
+    layout.set_text(s, -1)
+    if width:
+        layout.set_width(int(width * Pango.SCALE))
+        layout.set_ellipsize(Pango.EllipsizeMode.END)
+    w, h = layout.get_pixel_size()
+    if align == "center":
+        x -= w / 2
+    elif align == "right":
+        x -= w
+    cr.set_source_rgba(*color, alpha)
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, layout)
+    return w, h
+
+
+def pretty(path):
+    return path.parent.name, path.stem.replace("_", " ").replace("-", " ")
+
+
+# ---------------------------------------------------------------- swww-style transitions
+
+EFFECTS = ("grow", "wipe", "wave", "fade")
+
+
+class Transition:
+    """The old wallpaper turns into the new one on every monitor, in windows that sit at the desktop
+    layer: above xfdesktop, below everything else, like swww on Wayland."""
+
+    def __init__(self, old, new, effect):
+        self.effect = random.choices(EFFECTS, weights=(4, 3, 3, 1))[0] if effect not in EFFECTS else effect
+        self.dur = 1.0 if self.effect == "fade" else 1.35
+        self.angle = math.radians(random.choice((15, 165, 195, 345, 60, 240)))
+        self.t0, self.announced = None, False
+        display = Gdk.Display.get_default()
+        try:
+            _, px, py = display.get_default_seat().get_pointer().get_position()
+        except Exception:  # noqa: BLE001 - no pointer: grow from the middle
+            px = py = None
+        self.views = []
+        for i in range(display.get_n_monitors()):
+            mon = display.get_monitor(i)
+            g, scale = mon.get_geometry(), mon.get_scale_factor()
+            old_s, new_s = cover(old, g.width * scale, g.height * scale), cover(new, g.width * scale, g.height * scale)
+            for s in (old_s, new_s):
+                s.set_device_scale(scale, scale)
+            inside = px is not None and g.x <= px < g.x + g.width and g.y <= py < g.y + g.height
+            origin = (px - g.x, py - g.y) if inside else (g.width * random.uniform(0.3, 0.7), g.height * random.uniform(0.3, 0.7))
+            win = Gtk.Window()
+            win.set_type_hint(Gdk.WindowTypeHint.DESKTOP)
+            win.set_decorated(False)
+            win.set_skip_taskbar_hint(True)
+            win.set_skip_pager_hint(True)
+            win.set_accept_focus(False)
+            win.set_keep_below(True)
+            win.set_app_paintable(True)
+            win.move(g.x, g.y)
+            win.set_size_request(g.width, g.height)
+            view = {"win": win, "w": g.width, "h": g.height, "old": old_s, "new": new_s, "origin": origin, "drawn": False}
+            win.connect("draw", self.draw, view)
+            self.views.append(view)
+        for v in self.views:
+            v["win"].show_all()
+            v["win"].stick()
+        self.views[0]["win"].add_tick_callback(self.tick)
+        GLib.timeout_add(8000, Gtk.main_quit)  # whatever happens, never stay on screen
+
+    def draw(self, _widget, cr, v):
+        p = 0.0 if self.t0 is None else ease_in_out(clamp((time.monotonic() - self.t0) / self.dur))
+        cr.set_source_surface(v["old"], 0, 0)
+        cr.paint()
+        if p > 0:
+            self.paint_new(cr, v, p)
+        if not v["drawn"]:
+            v["drawn"] = True
+            if all(x["drawn"] for x in self.views) and not self.announced:
+                self.announced = True
+                GLib.timeout_add(60, self.announce)
+        return True
+
+    def announce(self):
+        print("ready", flush=True)  # chiron-rice switches the wallpaper underneath now
+        GLib.timeout_add(150, self.start)
+        return False
+
+    def start(self):
+        self.t0 = time.monotonic()
+        return False
+
+    def paint_new(self, cr, v, p):
+        w, h, new = v["w"], v["h"], v["new"]
+        cr.save()
+        if self.effect == "fade":
+            cr.set_source_surface(new, 0, 0)
+            cr.paint_with_alpha(p)
+        elif self.effect == "grow":  # a soft-edged circle from the mouse pointer
+            cx, cy = v["origin"]
+            soft = 0.14 * min(w, h)
+            r = p * (max(math.hypot(cx - x, cy - y) for x in (0, w) for y in (0, h)) + soft)
+            mask = cairo.RadialGradient(cx, cy, max(0.0, r - soft), cx, cy, max(r, 0.01))
+            mask.add_color_stop_rgba(0, 0, 0, 0, 1)
+            mask.add_color_stop_rgba(1, 0, 0, 0, 0)
+            cr.set_source_surface(new, 0, 0)
+            cr.mask(mask)
+        else:
+            dx, dy = math.cos(self.angle), math.sin(self.angle)
+            proj = [x * dx + y * dy for x in (0, w) for y in (0, h)]
+            lo, hi = min(proj), max(proj)
+            if self.effect == "wipe":  # a soft straight edge sweeping across at an angle
+                soft = 0.12 * min(w, h)
+                s = lo + p * (hi - lo + 2 * soft)
+                mask = cairo.LinearGradient(dx * (s - soft), dy * (s - soft), dx * s, dy * s)
+                mask.add_color_stop_rgba(0, 0, 0, 0, 1)
+                mask.add_color_stop_rgba(1, 0, 0, 0, 0)
+                cr.set_source_surface(new, 0, 0)
+                cr.mask(mask)
+            else:  # wave: a rippling edge sweeping across
+                nx, ny = -dy, dx
+                amp, lam = 0.04 * min(w, h), 0.25 * max(w, h)
+                s = lo - 2 * amp + p * (hi - lo + 4 * amp)
+                along = [x * nx + y * ny for x in (0, w) for y in (0, h)]
+                a0, a1 = min(along) - lam, max(along) + lam
+                n = 96
+                for i in range(n + 1):
+                    u = a0 + (a1 - a0) * i / n
+                    off = s + amp * math.sin(2 * math.pi * u / lam + p * 7)
+                    (cr.move_to if i == 0 else cr.line_to)(dx * off + nx * u, dy * off + ny * u)
+                back = lo - 4 * amp - 10
+                cr.line_to(dx * back + nx * a1, dy * back + ny * a1)
+                cr.line_to(dx * back + nx * a0, dy * back + ny * a0)
+                cr.close_path()
+                cr.clip()
+                cr.set_source_surface(new, 0, 0)
+                cr.paint()
+        cr.restore()
+
+    def tick(self, _widget, _clock):
+        for v in self.views:
+            v["win"].queue_draw()
+        if self.t0 is not None and time.monotonic() - self.t0 > self.dur + 0.4:
+            Gtk.main_quit()  # xfdesktop has drawn the new wallpaper underneath by now
+            return False
+        return True
+
+
+# ---------------------------------------------------------------- the picker
+
+class Picker(Gtk.Window):
+    """Opens by shrinking the current wallpaper into a preview card; Enter grows the chosen one back
+    into the desktop (the very picture xfdesktop then shows, so the hand-over is seamless)."""
+
+    LRU = {"card": 10, "full": 3, "blur": 12, "thumb": 160, "theme": 400}
+
+    def __init__(self):
+        super().__init__(title="Chiron wallpapers")
+        st = rice.load_state()
+        self.animate = st.get("animations", True)
+        self.mode = st.get("mode", "personal")
+        self.items = rice.wallpapers(self.mode)
+        self.names = [f"{p.parent.name}/{p.name}".lower() for p in self.items]
+        self.view = list(range(len(self.items)))
+        self.query = ""
+        cur = st.get("wallpaper")
+        self.current = Path(cur) if cur and Path(cur).is_file() else None
+        self.sel = next((i for i, p in enumerate(self.items) if p == self.current), 0)
+        self.exit_code = 1
+
+        display = Gdk.Display.get_default()
+        try:
+            _, px, py = display.get_default_seat().get_pointer().get_position()
+            mon = display.get_monitor_at_point(px, py)
+        except Exception:  # noqa: BLE001
+            mon = display.get_primary_monitor() or display.get_monitor(0)
+        g = mon.get_geometry()
+        self.W, self.H = g.width, g.height
+        self.cw, self.ch = int(self.W * 0.56), int(self.H * 0.56)  # the card has the screen's shape
+        self.cx, self.cy = (self.W - self.cw) / 2, self.H * 0.095
+        self.move(g.x, g.y)
+        self.set_default_size(self.W, self.H)
+        self.set_decorated(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_app_paintable(True)
+        self.set_keep_above(True)
+        for i in range(display.get_n_monitors()):
+            if display.get_monitor(i) == mon:
+                self.fullscreen_on_monitor(self.get_screen(), i)
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("draw", self.on_draw)
+        self.connect("key-press-event", self.on_key)
+        self.connect("scroll-event", self.on_scroll)
+        self.connect("button-press-event", self.on_click)
+        self.connect("map-event", self.on_map)
+        self.connect("delete-event", lambda *a: self.quit(1))
+
+        # caches: kind -> OrderedDict(index -> result); "cur" is the current wallpaper
+        self.cache = {k: OrderedDict() for k in self.LRU}
+        self.loaded_at = {}
+        self.inflight, self.lock, self.wake, self.closing = set(), threading.Lock(), threading.Event(), False
+        self.cur_full = cover(self.current, self.W, self.H) if self.current else None
+        base = theme_of(self.current) if self.current else None
+        self.theme_from = self.theme_to = base or rice.derive({"background": "#0b0a12", "foreground": "#ece9f4",
+                                                              **{f"color{i}": "#8b5cf6" for i in range(16)}})
+        now = time.monotonic()
+        self.theme_tw = Tween(1, 1, 0.01)
+        self.layers = [{"src": self.cur_full, "tw": Tween(1, 1, 0.01)}] if self.cur_full else []  # card pictures
+        self.backs = []  # backdrop pictures
+        self.pos = float(self.sel)
+        self.phase, self.phase_tw = "open", Tween(0, 1, 0.6 if self.animate else 0.01, ease_out)
+        self.mock_tw = Tween(1, 1, 0.01)
+        self.apply_done = None
+        self.last = now
+        if self.items:
+            self.select(self.sel, fade=False)
+        threading.Thread(target=self.loader, daemon=True).start()
+        self.add_tick_callback(self.tick)
+
+    # ---------------------------------------------------------------- background loading
+
+    def jobs(self):
+        if not self.view:
+            return []
+        s = self.view[self.sel]
+        near = [self.view[self.sel + d] for d in (1, -1, 2, -2) if 0 <= self.sel + d < len(self.view)]
+        film = [self.view[self.sel + d] for d in range(-9, 10) if 0 <= self.sel + d < len(self.view)]
+        out = [("card", s), ("theme", s), ("blur", s)] + [("thumb", i) for i in film] + [("full", s)]
+        out += [(k, i) for i in near for k in ("card", "theme", "blur")]
+        return out
+
+    def next_job(self):
+        with self.lock:
+            for job in self.jobs():
+                if job not in self.inflight and job[1] not in self.cache[job[0]]:
+                    self.inflight.add(job)
+                    return job
+        return None
+
+    def loader(self):
+        while not self.closing:
+            job = self.next_job()
+            if job is None:
+                self.wake.wait(0.3)
+                self.wake.clear()
+                continue
+            kind, idx = job
+            path = self.items[idx]
+            try:
+                res = {"card": lambda: cover(path, self.cw, self.ch), "full": lambda: cover(path, self.W, self.H),
+                       "blur": lambda: blurred(path, self.W, self.H), "thumb": lambda: thumb(path),
+                       "theme": lambda: theme_of(path)}[kind]()
+            except Exception:  # noqa: BLE001 - an unreadable picture just stays a placeholder
+                res = None
+            GLib.idle_add(self.loaded, kind, idx, res)
+
+    def loaded(self, kind, idx, res):
+        with self.lock:
+            self.inflight.discard((kind, idx))
+            c = self.cache[kind]
+            c[idx] = res
+            while len(c) > self.LRU[kind]:
+                c.popitem(last=False)
+        self.loaded_at[(kind, idx)] = time.monotonic()
+        if self.view and idx == self.view[self.sel] and res is not None:
+            if kind == "card" and self.phase == "browse":
+                self.push_layer(res)
+            elif kind == "blur":
+                self.backs.append({"src": res, "tw": Tween(0, 1, 0.45 if self.animate else 0.01)})
+            elif kind == "theme":
+                self.retheme(res)
+        self.queue_draw()
+        return False
+
+    def get(self, kind, idx):
+        c = self.cache[kind]
+        if idx in c:
+            c.move_to_end(idx)
+            return c[idx]
+        return None
+
+    # ---------------------------------------------------------------- state changes
+
+    def push_layer(self, src, dur=0.28):
+        self.layers.append({"src": src, "tw": Tween(0, 1, dur if self.animate else 0.01)})
+
+    def theme_now(self, now):
+        return mix_theme(self.theme_from, self.theme_to, self.theme_tw.value(now))
+
+    def retheme(self, theme):
+        now = time.monotonic()
+        self.theme_from, self.theme_to = self.theme_now(now), theme
+        self.theme_tw = Tween(0, 1, 0.45 if self.animate else 0.01, ease_in_out)
+
+    def select(self, sel, fade=True):
+        if not self.view:
+            return
+        self.sel = max(0, min(len(self.view) - 1, sel))
+        idx = self.view[self.sel]
+        src = self.get("card", idx) or self.get("thumb", idx)
+        if src is not None and fade:
+            self.push_layer(src)
+        th = self.get("theme", idx)
+        if th:
+            self.retheme(th)
+        b = self.get("blur", idx)
+        if b is not None:
+            self.backs.append({"src": b, "tw": Tween(0, 1, 0.45 if self.animate else 0.01)})
+        self.wake.set()
+        self.queue_draw()
+
+    def set_query(self, q):
+        self.query = q
+        toks = q.lower().split()
+        keep = self.view[self.sel] if self.view else None
+        self.view = [i for i, n in enumerate(self.names) if all(t in n for t in toks)]
+        new = self.view.index(keep) if keep in self.view else 0
+        self.pos = new - 0.6 if self.view else 0.0
+        self.select(new)
+
+    def confirm(self):
+        if not self.view or self.phase != "browse":
+            return
+        idx = self.view[self.sel]
+        path = self.items[idx]
+        self.phase, self.phase_tw = "confirm", Tween(0, 1, 0.65 if self.animate else 0.01, ease_in_out)
+        self.target = idx
+        self.wake.set()
+
+        def work():
+            try:
+                rice.apply(path, quiet=True)
+                code = 0
+            except (Exception, SystemExit) as e:  # noqa: BLE001
+                print(f"chiron-walls: {e}", file=sys.stderr)
+                code = 2
+            GLib.idle_add(self.applied, code)
+        threading.Thread(target=work, daemon=True).start()
+
+    def applied(self, code):
+        self.exit_code, self.apply_done = code, time.monotonic()
+        return False
+
+    def cancel(self):
+        if self.phase not in ("browse", "open"):
+            return
+        if self.cur_full is not None:
+            self.push_layer(self.cur_full, 0.2)
+        self.phase, self.phase_tw = "cancel", Tween(0, 1, 0.5 if self.animate else 0.01, ease_in_out)
+
+    def quit(self, code=None):
+        if code is not None:
+            self.exit_code = code
+        self.closing = True
+        self.wake.set()
+        Gtk.main_quit()
+        return True
+
+    # ---------------------------------------------------------------- input
+
+    def on_map(self, *_):
+        seat = Gdk.Display.get_default().get_default_seat()
+        GLib.timeout_add(80, lambda: seat.grab(self.get_window(), Gdk.SeatCapabilities.KEYBOARD, False, None, None, None) and False)
+
+    def on_key(self, _w, ev):
+        if self.phase not in ("open", "browse"):
+            return True
+        k = Gdk.keyval_name(ev.keyval)
+        ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
+        moves = {"Right": 1, "Down": 1, "Left": -1, "Up": -1, "Page_Down": 8, "Page_Up": -8}
+        if k in moves:
+            self.select(self.sel + moves[k])
+        elif k == "Home":
+            self.select(0)
+        elif k == "End":
+            self.select(len(self.view) - 1)
+        elif k in ("Return", "KP_Enter"):
+            self.confirm()
+        elif k == "Escape":
+            self.set_query("") if self.query else self.cancel()
+        elif k == "BackSpace":
+            self.set_query(self.query[:-1])
+        elif k == "Tab":
+            v = self.mock_tw.value(time.monotonic())
+            self.mock_tw = Tween(v, 0.0 if self.mock_tw.b > 0.5 else 1.0, 0.25 if self.animate else 0.01)
+            self.queue_draw()
+        elif ctrl and k in ("u", "U"):
+            self.set_query("")
+        else:
+            ch = chr(Gdk.keyval_to_unicode(ev.keyval)) if Gdk.keyval_to_unicode(ev.keyval) else ""
+            if ch and ch.isprintable() and not ctrl:
+                self.set_query(self.query + ch)
+        return True
+
+    def on_scroll(self, _w, ev):
+        if self.phase == "browse":
+            d = {Gdk.ScrollDirection.UP: -1, Gdk.ScrollDirection.LEFT: -1, Gdk.ScrollDirection.DOWN: 1,
+                 Gdk.ScrollDirection.RIGHT: 1}.get(ev.direction)
+            if d is None:
+                ok, dx, dy = ev.get_scroll_deltas()
+                d = (1 if dx + dy > 0 else -1) if ok and abs(dx + dy) > 0.3 else 0
+            if d:
+                self.select(self.sel + d)
+        return True
+
+    def on_click(self, _w, ev):
+        if self.phase != "browse":
+            return True
+        if self.cx <= ev.x <= self.cx + self.cw and self.cy <= ev.y <= self.cy + self.ch:
+            self.confirm()
+            return True
+        tw, gap, fy = self.film_geometry()
+        if fy - tw * 0.3 <= ev.y <= fy + tw * 0.75:
+            d = round((ev.x - self.W / 2) / (tw + gap) + self.pos - self.sel)
+            if d:
+                self.select(self.sel + d)
+        return True
+
+    # ---------------------------------------------------------------- animation clock
+
+    def tick(self, _widget, _clock):
+        now = time.monotonic()
+        dt, self.last = min(0.1, now - self.last), now
+        busy = False
+        if self.view:
+            target = float(self.sel)
+            if abs(target - self.pos) > 0.002:
+                self.pos += (target - self.pos) * (1 - math.exp(-dt * 13)) if self.animate else target - self.pos
+                busy = True
+            else:
+                self.pos = target
+        for layers in (self.layers, self.backs):
+            while len(layers) > 1 and layers[1]["tw"].done(now):
+                layers.pop(0)  # fully covered by the next one
+            busy = busy or any(not l["tw"].done(now) for l in layers)
+        busy = busy or not self.theme_tw.done(now) or not self.mock_tw.done(now) or not self.phase_tw.done(now)
+        busy = busy or any(now - t < 0.3 for t in self.loaded_at.values())
+        if self.phase == "open" and self.phase_tw.done(now):
+            self.phase = "browse"
+            if self.view:  # the opening showed the current wallpaper; settle on the selected one
+                src = self.get("card", self.view[self.sel]) or self.get("thumb", self.view[self.sel])
+                if src is not None:  # even the same picture: the card-sized copy is much cheaper to draw
+                    self.push_layer(src)
+        if self.phase == "confirm" and self.phase_tw.done(now) and self.apply_done and now - self.apply_done > 0.25:
+            return self.quit()
+        if self.phase == "cancel" and self.phase_tw.done(now):
+            return self.quit(1)
+        if busy or self.phase in ("confirm", "cancel", "open"):
+            self.queue_draw()
+        return True
+
+    # ---------------------------------------------------------------- drawing
+
+    def card_rect(self, now):
+        """Full screen while opening/closing, the card while browsing."""
+        if self.phase == "open":
+            t = self.phase_tw.value(now)
+        elif self.phase in ("confirm", "cancel"):
+            t = 1 - self.phase_tw.value(now)
+        else:
+            t = 1.0
+        return (lerp(0, self.cx, t), lerp(0, self.cy, t), lerp(self.W, self.cw, t), lerp(self.H, self.ch, t), t)
+
+    def ui_alpha(self, now):
+        if self.phase == "open":
+            return ease_out(clamp((self.phase_tw.progress(now) - 0.35) / 0.65))
+        if self.phase in ("confirm", "cancel"):
+            return 1 - ease_out(clamp(self.phase_tw.progress(now) / 0.45))
+        return 1.0
+
+    def film_geometry(self):
+        tw = self.H * 0.16  # 16:9 thumbnails 0.09 of the screen height tall
+        return tw, tw * 0.12, self.H * 0.85
+
+    def on_draw(self, _w, cr):
+        now = time.monotonic()
+        th = self.theme_now(now)
+        x, y, w, h, t = self.card_rect(now)
+        ui = self.ui_alpha(now)
+        # backdrop: the selected picture, blurred and darkened (the sharp current one while opening)
+        cr.set_source_rgb(*th["bg"])
+        cr.paint()
+        if self.phase == "open" and self.cur_full is not None:
+            cr.set_source_surface(self.cur_full, 0, 0)
+            cr.paint()
+        for b in self.backs:
+            a = b["tw"].value(now) * (t if self.phase in ("open", "cancel", "confirm") else 1.0)
+            paint_scaled(cr, b["src"], 0, 0, self.W, self.H, a, cairo.FILTER_GOOD)
+        cr.set_source_rgba(*th["bg"], 0.62 * t)
+        cr.paint()
+        if self.items:
+            self.draw_card(cr, now, th, x, y, w, h, t)
+        if ui > 0.01:
+            self.draw_ui(cr, now, th, ui)
+        return True
+
+    def draw_card(self, cr, now, th, x, y, w, h, t):
+        r = 18 * t
+        if t > 0.02:  # soft shadow under the card
+            for i in range(6):
+                rrect(cr, x - i * 3, y - i * 3 + 10, w + i * 6, h + i * 6, r + i * 3)
+                cr.set_source_rgba(0, 0, 0, 0.07 * t)
+                cr.fill()
+        cr.save()
+        rrect(cr, x, y, w, h, r)
+        cr.clip()
+        big = w > self.cw * 1.05
+        target = self.target if self.phase == "confirm" else None
+        for layer in self.layers:
+            src = layer["src"]
+            if big and target is not None:
+                src = self.get("full", target) or self.get("card", target) or src
+            paint_scaled(cr, src, x, y, w, h, layer["tw"].value(now), cairo.FILTER_GOOD if not big else cairo.FILTER_BILINEAR)
+        mock = self.mock_tw.value(now) * clamp((t - 0.55) / 0.45)
+        if mock > 0.01:
+            cr.save()
+            cr.translate(x, y)
+            cr.scale(w / self.W, h / self.H)
+            self.draw_mock(cr, th, mock)
+            cr.restore()
+        cr.restore()
+        if t > 0.02:
+            rrect(cr, x + 0.5, y + 0.5, w - 1, h - 1, r)
+            cr.set_source_rgba(*th["accent"], 0.85 * t)
+            cr.set_line_width(2)
+            cr.stroke()
+
+    def draw_mock(self, cr, th, a):
+        """The desktop as it will look, at real size (the card scales it down)."""
+        W, H = self.W, self.H
+        acc, fg, muted, bg, s1, s2 = th["accent"], th["fg"], th["muted"], th["bg"], th["surface"], th["surface2"]
+
+        def island(x, w):
+            rrect(cr, x, 3, w, 24, 7)
+            cr.set_source_rgba(*s1, a)
+            cr.fill()
+            for ex in (x, x + w - 3):
+                cr.rectangle(ex, 6, 3, 18)
+                cr.set_source_rgba(*acc, a)
+                cr.fill()
+
+        cr.rectangle(0, 0, W, 30)
+        cr.set_source_rgba(*bg, 0.35 * a)
+        cr.fill()
+        island(6, 28)
+        for i in range(4):  # menu grid
+            cr.rectangle(14 + (i % 2) * 7, 9 + (i // 2) * 7, 5, 5)
+            cr.set_source_rgba(*fg, a)
+            cr.fill()
+        island(40, 100)
+        cr.arc(58, 15, 9, 0, 2 * math.pi)
+        cr.set_source_rgba(*acc, a)
+        cr.fill()
+        text(cr, "1", 58, 7, 12, th["on_accent"], a, "Bold", align="center")
+        for i, n in enumerate("234"):
+            text(cr, n, 82 + i * 20, 7, 12, fg, a, align="center")
+        island(146, 96)
+        for i in range(4):
+            rrect(cr, 158 + i * 20, 9, 12, 12, 3)
+            cr.set_source_rgba(*fg, 0.85 * a)
+            cr.fill()
+        text(cr, "Terminal", W / 2, 7, 13, fg, a, align="center")
+        island(W - 404, 130)
+        for i, lab in enumerate(("cpu", "mem", "net")):
+            text(cr, lab, W - 380 + i * 40, 6, 12, fg, a)
+            cr.rectangle(W - 380 + i * 40, 23, 24 * (0.3 + 0.25 * i), 2)
+            cr.set_source_rgba(*acc, a)
+            cr.fill()
+        island(W - 266, 128)
+        for i in range(5):
+            cr.arc(W - 246 + i * 22, 15, 5, 0, 2 * math.pi)
+            cr.set_source_rgba(*fg, 0.9 * a)
+            cr.fill()
+        island(W - 130, 66)
+        text(cr, time.strftime("%H:%M"), W - 97, 6, 13, fg, a, align="center")
+        island(W - 56, 46)
+        cr.arc(W - 33, 15, 5, 0, 2 * math.pi)
+        cr.set_source_rgba(*fg, a)
+        cr.fill()
+
+        def window(x, y, w, h, title):
+            for i in range(4):
+                rrect(cr, x - i * 2, y - i * 2 + 6, w + i * 4, h + i * 4, 10 + i * 2)
+                cr.set_source_rgba(0, 0, 0, 0.08 * a)
+                cr.fill()
+            rrect(cr, x, y, w, h, 10)
+            cr.set_source_rgba(*bg, 0.97 * a)
+            cr.fill()
+            cr.save()
+            rrect(cr, x, y, w, h, 10)
+            cr.clip()
+            cr.rectangle(x, y, w, 34)
+            cr.set_source_rgba(*s2, a)
+            cr.fill()
+            cr.restore()
+            text(cr, title, x + w / 2, y + 8, 14, fg, a, "Bold", align="center")
+            for i in range(3):
+                cr.arc(x + w - 20 - i * 22, y + 17, 6, 0, 2 * math.pi)
+                cr.set_source_rgba(*(acc if i == 0 else muted), a)
+                cr.fill()
+
+        # file manager
+        fx, fy, fw, fh = W * 0.06, H * 0.13, W * 0.42, H * 0.5
+        window(fx, fy, fw, fh, "Files")
+        side = fw * 0.28
+        cr.rectangle(fx, fy + 34, side, fh - 44)
+        cr.set_source_rgba(*s1, a)
+        cr.fill()
+        for i, lab in enumerate(("Home", "Desktop", "Documents", "Downloads", "Pictures", "reports")):
+            yy = fy + 48 + i * 30
+            if i == 4:
+                rrect(cr, fx + 8, yy - 4, side - 16, 26, 6)
+                cr.set_source_rgba(*acc, a)
+                cr.fill()
+            text(cr, lab, fx + 20, yy, 13, th["on_accent"] if i == 4 else fg, a, width=side - 30)
+        cols = 4
+        cell = (fw - side - 30) / cols
+        for i in range(8):
+            gx, gy = fx + side + 20 + (i % cols) * cell, fy + 52 + (i // cols) * (cell * 0.95)
+            fwid = cell * 0.62
+            rrect(cr, gx + (cell - fwid) / 2, gy, fwid * 0.45, fwid * 0.2, 3)
+            cr.set_source_rgba(*acc, 0.75 * a)
+            cr.fill()
+            rrect(cr, gx + (cell - fwid) / 2, gy + fwid * 0.12, fwid, fwid * 0.72, 5)
+            cr.set_source_rgba(*acc, a)
+            cr.fill()
+            text(cr, ("Music", "Videos", "Pictures", "Public", "reports", "Templates", "walls", "Documents")[i],
+                 gx + cell / 2, gy + fwid * 0.9, 12, fg, a, align="center", width=cell - 6)
+
+        # terminal
+        tx, ty, tw, tht = W * 0.52, H * 0.34, W * 0.42, H * 0.42
+        window(tx, ty, tw, tht, "Terminal")
+        lh = 21
+        lx, ly = tx + 18, ty + 48
+        text(cr, "~ ", lx, ly, 14, muted, a, font=MONO)
+        text(cr, "❯", lx + 18, ly, 14, acc, a, font=MONO)
+        text(cr, "chiron report", lx + 38, ly, 14, fg, a, font=MONO)
+        for i, (lab, val, col) in enumerate((("Battery", "88% of new", 2), ("Storage", "SMART passed", 2),
+                                              ("CPU", "62 °C under load", 3), ("Memory", "no errors", 2))):
+            yy = ly + lh * (i + 1.3)
+            text(cr, "●", lx, yy, 13, th["term"][col], a, font=MONO)
+            text(cr, f"{lab:<9}", lx + 20, yy, 14, fg, a, font=MONO)
+            text(cr, val, lx + 120, yy, 14, muted, a, font=MONO)
+        bw = (tw - 36) / 8
+        for i in range(16):
+            cr.rectangle(lx + (i % 8) * bw, ly + lh * 6.2 + (i // 8) * 16, bw - 3, 13)
+            cr.set_source_rgba(*th["term"][i], a)
+            cr.fill()
+        text(cr, "~ ", lx, ly + lh * 7.9, 14, muted, a, font=MONO)
+        text(cr, "❯", lx + 18, ly + lh * 7.9, 14, acc, a, font=MONO)
+        cr.rectangle(lx + 38, ly + lh * 7.9 + 2, 9, 17)
+        cr.set_source_rgba(*acc, a)
+        cr.fill()
+
+        # conky
+        kx, ky, kw, kh = W - 262, 46, 236, 150
+        rrect(cr, kx, ky, kw, kh, 6)
+        cr.set_source_rgba(*s1, 0.85 * a)
+        cr.fill()
+        text(cr, "CHIRON", kx + 12, ky + 8, 13, acc, a, font=MONO)
+        cr.rectangle(kx + 74, ky + 17, kw - 88, 1)
+        cr.set_source_rgba(*muted, a)
+        cr.fill()
+        text(cr, "CPU", kx + 12, ky + 30, 13, fg, a, font=MONO)
+        text(cr, "9%", kx + kw - 12, ky + 30, 13, fg, a, font=MONO, align="right")
+        cr.move_to(kx + 12, ky + 76)
+        for i in range(40):
+            cr.line_to(kx + 12 + i * (kw - 24) / 39, ky + 76 - 14 * abs(math.sin(i * 0.7)) * (0.4 + 0.6 * (i % 5 == 0)))
+        cr.set_source_rgba(*acc, a)
+        cr.set_line_width(1.5)
+        cr.stroke()
+        for i, (lab, val) in enumerate((("RAM", "0.9GiB / 3.7GiB"), ("Disk /", "16GiB / 98GiB"))):
+            text(cr, lab, kx + 12, ky + 88 + i * 20, 13, fg, a, font=MONO)
+            text(cr, val, kx + kw - 12, ky + 88 + i * 20, 13, fg, a, font=MONO, align="right")
+
+        # dock
+        dw, dh = 440, 44
+        dx, dy = (W - dw) / 2, H - dh
+        rrect(cr, dx, dy, dw, dh + 10, 10)
+        cr.set_source_rgba(*bg, 0.92 * a)
+        cr.fill()
+        for i in range(10):
+            cx = dx + 26 + i * (dw - 52) / 9
+            rrect(cr, cx - 11, dy + 10, 22, 22, 5)
+            cr.set_source_rgba(*fg, 0.9 * a)
+            cr.fill()
+        cr.rectangle(dx + 18, dy + 38, 16, 3)
+        cr.set_source_rgba(*acc, a)
+        cr.fill()
+
+    def draw_ui(self, cr, now, th, ui):
+        W, H = self.W, self.H
+        fg, muted, acc, s1 = th["fg"], th["muted"], th["accent"], th["surface"]
+        slide = (1 - ui) * 24
+        # header: title, search, count
+        hy = H * 0.035 - slide
+        text(cr, "Wallpapers", self.cx, hy, H * 0.03, fg, ui, "Bold")
+        qw = W * 0.26
+        qx = W / 2 - qw / 2
+        rrect(cr, qx, hy - 2, qw, H * 0.045, H * 0.0225)
+        cr.set_source_rgba(*s1, 0.9 * ui)
+        cr.fill()
+        rrect(cr, qx, hy - 2, qw, H * 0.045, H * 0.0225)
+        cr.set_source_rgba(*acc, (0.9 if self.query else 0.35) * ui)
+        cr.set_line_width(1.5)
+        cr.stroke()
+        qs = H * 0.02
+        if self.query:
+            tw_, _ = text(cr, self.query, qx + 16, hy + H * 0.0225 - qs * 0.7, qs, fg, ui, width=qw - 40)
+            cr.rectangle(qx + 18 + min(tw_, qw - 40), hy + H * 0.0225 - qs * 0.6, 2, qs * 1.2)
+            cr.set_source_rgba(*acc, ui * (0.5 + 0.5 * math.cos(now * 5)))
+            cr.fill()
+        else:
+            text(cr, "Type to search", qx + 16, hy + H * 0.0225 - qs * 0.7, qs, muted, ui)
+        count = f"{len(self.view)} of {len(self.items)}  ·  {self.mode}"
+        text(cr, count, self.cx + self.cw, hy + H * 0.008, H * 0.018, muted, ui, align="right")
+        if not self.items:
+            text(cr, "No wallpapers yet: run  chiron walls update", W / 2, H * 0.45, H * 0.028, fg, ui, align="center")
+            return
+        if not self.view:
+            text(cr, "Nothing matches", W / 2, self.cy + self.ch / 2, H * 0.03, fg, ui, "Bold", align="center")
+        # palette under the card
+        py = self.cy + self.ch + H * 0.02 + slide * 0.5
+        sw, gap = H * 0.05, H * 0.012
+        swatches = (("Accent", acc), ("Background", th["bg"]), ("Surface", th["surface2"]), ("Text", fg), ("Muted", muted))
+        term_w = H * 0.022
+        total = len(swatches) * (sw * 2.6 + gap) + 8 * term_w + gap * 2
+        x0 = W / 2 - total / 2
+        for i, (lab, col) in enumerate(swatches):
+            sx = x0 + i * (sw * 2.6 + gap)
+            rrect(cr, sx, py, sw, sw * 0.62, 6)
+            cr.set_source_rgba(*col, ui)
+            cr.fill_preserve()
+            cr.set_source_rgba(*fg, 0.25 * ui)
+            cr.set_line_width(1)
+            cr.stroke()
+            text(cr, lab, sx + sw + 8, py - 1, H * 0.014, muted, ui)
+            text(cr, rice.rgb2hex(col), sx + sw + 8, py + H * 0.016, H * 0.014, fg, ui, font=MONO)
+        tx = x0 + len(swatches) * (sw * 2.6 + gap) + gap
+        for i, col in enumerate(th["term"]):
+            cr.rectangle(tx + (i % 8) * term_w, py + (i // 8) * sw * 0.31, term_w - 2, sw * 0.31 - 2)
+            cr.set_source_rgba(*col, ui)
+            cr.fill()
+        if not self.view:
+            return
+        # name of the selected picture
+        cat, name = pretty(self.items[self.view[self.sel]])
+        ny = py + sw * 0.62 + H * 0.016
+        nw, _ = text(cr, cat.upper(), W / 2, ny, H * 0.0145, acc, ui, "Bold", align="center")
+        text(cr, name, W / 2, ny + H * 0.021, H * 0.02, fg, ui, align="center", width=W * 0.6)
+        # filmstrip
+        tw, gap, fy = self.film_geometry()
+        fy += slide * 2
+        th_h = tw * 9 / 16
+        lo, hi = int(self.pos - 7), int(self.pos + 8)
+        for j in range(max(0, lo), min(len(self.view), hi + 1)):
+            d = j - self.pos
+            near = clamp(1 - abs(d))
+            sc = 1 + 0.22 * near
+            w_, h_ = tw * sc, th_h * sc
+            x_ = W / 2 + d * (tw + gap) - w_ / 2
+            y_ = fy - h_ / 2 - 8 * near
+            if x_ > W or x_ + w_ < 0:
+                continue
+            a = ui * clamp(1 - 0.13 * abs(d), 0.3, 1)
+            idx = self.view[j]
+            src = self.get("thumb", idx)
+            if near > 0.01:  # glow around the selected one
+                for i in range(4):
+                    rrect(cr, x_ - 2 - i * 2.5, y_ - 2 - i * 2.5, w_ + 4 + i * 5, h_ + 4 + i * 5, 10 + i * 2.5)
+                    cr.set_source_rgba(*acc, 0.12 * near * a)
+                    cr.fill()
+            cr.save()
+            rrect(cr, x_, y_, w_, h_, 8)
+            cr.clip()
+            cr.set_source_rgba(*s1, a)
+            cr.paint()
+            if src is not None:
+                fade = clamp((now - self.loaded_at.get(("thumb", idx), 0)) / 0.25)
+                paint_scaled(cr, src, x_, y_, w_, h_, a * fade, cairo.FILTER_GOOD)
+            cr.restore()
+            if near > 0.01:
+                rrect(cr, x_ - 1, y_ - 1, w_ + 2, h_ + 2, 9)
+                cr.set_source_rgba(*acc, near * a)
+                cr.set_line_width(2.5)
+                cr.stroke()
+        # key hints
+        hint = "←  →  browse     type  search     Tab  preview on/off     Enter  apply     Esc  back"
+        text(cr, hint, W / 2, H * 0.955 + slide, H * 0.016, muted, ui * 0.9, align="center")
+
+
+def main(argv):
+    if not argv or argv[0] == "pick":
+        win = Picker()
+        win.show_all()
+        Gtk.main()
+        return win.exit_code
+    if argv[0] == "transition" and len(argv) >= 3:
+        try:
+            Transition(Path(argv[1]), Path(argv[2]), argv[3] if len(argv) > 3 else "random")
+        except Exception as e:  # noqa: BLE001 - chiron-rice goes on without the animation
+            print(f"chiron-walls: {e}", file=sys.stderr)
+            return 1
+        Gtk.main()
+        return 0
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

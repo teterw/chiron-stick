@@ -52,19 +52,34 @@ for t in Papirus Papirus-Dark; do
   gtk-update-icon-cache --force --quiet "/usr/share/icons/$t"
 done
 
-echo "===== 2. Verified downloads"
-fetch "$ADW_URL" "$ADW_SHA" "$W/adw.tar.xz"
-tar -xJf "$W/adw.tar.xz" -C /usr/share/themes
-ls -d /usr/share/themes/adw-gtk3*
-fetch "$FASTFETCH_URL" "$FASTFETCH_SHA" "$W/fastfetch.deb"
-"${APT[@]}" install "$W/fastfetch.deb"
-fetch "$STARSHIP_URL" "$STARSHIP_SHA" "$W/starship.tar.gz"
-tar -xzf "$W/starship.tar.gz" -C "$W"
-install -m 0755 "$W/starship" /usr/local/bin/starship
-fetch "$NERDFONT_URL" "$NERDFONT_SHA" "$W/jbm.tar.xz"
-install -d /usr/local/share/fonts/JetBrainsMonoNerd
-tar -xJf "$W/jbm.tar.xz" -C /usr/local/share/fonts/JetBrainsMonoNerd --wildcards '*.ttf'
-fc-cache -f >/dev/null
+echo "===== 2. Verified downloads (skipped when that exact file is already installed)"
+STAMPS=/usr/local/share/chiron/installed  # one file per download, holding its SHA-256; delete to reinstall
+have() { [ "$(cat "$STAMPS/$1" 2>/dev/null)" = "$2" ] && echo "already installed: $1"; }
+mark() { install -d "$STAMPS"; echo "$2" > "$STAMPS/$1"; }
+if ! have adw-gtk3 "$ADW_SHA"; then
+  fetch "$ADW_URL" "$ADW_SHA" "$W/adw.tar.xz"
+  tar -xJf "$W/adw.tar.xz" -C /usr/share/themes
+  ls -d /usr/share/themes/adw-gtk3*
+  mark adw-gtk3 "$ADW_SHA"
+fi
+if ! have fastfetch "$FASTFETCH_SHA"; then
+  fetch "$FASTFETCH_URL" "$FASTFETCH_SHA" "$W/fastfetch.deb"
+  "${APT[@]}" install "$W/fastfetch.deb"
+  mark fastfetch "$FASTFETCH_SHA"
+fi
+if ! have starship "$STARSHIP_SHA"; then
+  fetch "$STARSHIP_URL" "$STARSHIP_SHA" "$W/starship.tar.gz"
+  tar -xzf "$W/starship.tar.gz" -C "$W"
+  install -m 0755 "$W/starship" /usr/local/bin/starship
+  mark starship "$STARSHIP_SHA"
+fi
+if ! have jetbrainsmono-nerd "$NERDFONT_SHA"; then
+  fetch "$NERDFONT_URL" "$NERDFONT_SHA" "$W/jbm.tar.xz"
+  install -d /usr/local/share/fonts/JetBrainsMonoNerd
+  tar -xJf "$W/jbm.tar.xz" -C /usr/local/share/fonts/JetBrainsMonoNerd --wildcards '*.ttf'
+  fc-cache -f >/dev/null
+  mark jetbrainsmono-nerd "$NERDFONT_SHA"
+fi
 fc-list | grep -c "JetBrainsMono Nerd Font" | sed 's/^/Nerd Font faces: /'
 
 echo "===== 3. wallust $WALLUST_VERSION from crates.io (checksums checked by cargo --locked)"
@@ -93,9 +108,10 @@ echo "===== 5. Boot branding: GRUB theme, Plymouth splash + unlock screen, login
 python3 /opt/chiron/rice/branding/make-assets.py "$W/assets"
 T=/boot/grub/themes/chiron
 install -d "$T"
-install -m 0644 "$W/assets/background.png" "$W/assets/select_c.png" "$W/assets/select_w.png" "$T/"
+install -m 0644 "$W/assets/background.png" "$W/assets/"select_*.png "$W/assets/"terminal_box_*.png "$T/"
 install -m 0644 /opt/chiron/rice/branding/grub-theme.txt "$T/theme.txt"
-for size in 16 20; do grub-mkfont -s $size -o "$T/dejavu-sans-$size.pf2" /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; done
+rm -f "$T"/dejavu-sans-*.pf2  # GRUB loads every font in the theme folder at boot, so no leftovers
+for size in 16 18; do grub-mkfont -s $size -o "$T/dejavu-sans-$size.pf2" /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; done
 grub-mkfont -s 14 -o "$T/dejavu-sans-mono-14.pf2" /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 printf '# Chiron Stick boot menu theme (setup/50-rice.sh)\nGRUB_THEME=%s/theme.txt\n' "$T" > /etc/default/grub.d/99-chiron-theme.cfg
 update-grub 2>&1 | grep -E "theme|Found theme" || true
@@ -103,16 +119,29 @@ update-grub 2>&1 | grep -E "theme|Found theme" || true
 P=/usr/share/plymouth/themes/chiron
 rm -rf "$P"
 cp -a /usr/share/plymouth/themes/mint-logo "$P"
-rm -f "$P/mint-logo.plymouth"
+# Mint's frames go: ours may be fewer, and a leftover frame would flash Mint's logo
+rm -f "$P/mint-logo.plymouth" "$P"/animation-*.png "$P"/throbber-*.png
 cp "$W/assets/plymouth/"*.png "$P/"
-sed -e 's/^Name=.*/Name=Chiron Stick/' -e 's/^Description=.*/Description=Chiron Stick: a heartbeat line while it boots./' \
-    -e "s|^ImageDir=.*|ImageDir=$P|" /usr/share/plymouth/themes/mint-logo/mint-logo.plymouth > "$P/chiron.plymouth"
+sed -e 's/^Name=.*/Name=Chiron Stick/' -e 's/^Description=.*/Description=Chiron Stick: a twinkling constellation while it boots./' \
+    -e "s|^ImageDir=.*|ImageDir=$P|" -e 's/^BackgroundStartColor=.*/BackgroundStartColor=0x0b0a12/' \
+    -e 's/^BackgroundEndColor=.*/BackgroundEndColor=0x181228/' \
+    /usr/share/plymouth/themes/mint-logo/mint-logo.plymouth > "$P/chiron.plymouth"
 update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth "$P/chiron.plymouth" 250
 update-alternatives --set default.plymouth "$P/chiron.plymouth"
 update-initramfs -u -k all 2>&1 | tail -n 2
 
 install -d /usr/share/backgrounds/chiron
 install -m 0644 "$W/assets/background.png" /usr/share/backgrounds/chiron/login.png
+# The login screen's own theme: adw-gtk3-dark with Chiron violet instead of its default blue
+G=/usr/share/themes/Chiron-greeter
+install -d "$G/gtk-3.0"
+cat > "$G/gtk-3.0/gtk.css" <<'EOF'
+@import url("file:///usr/share/themes/adw-gtk3-dark/gtk-3.0/gtk.css");
+@define-color accent_color #a78bfa;
+@define-color accent_bg_color #8b5cf6;
+@define-color accent_fg_color #ffffff;
+EOF
+printf '[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Chiron-greeter\nComment=Chiron Stick login screen (setup/50-rice.sh)\n\n[X-GNOME-Metatheme]\nGtkTheme=Chiron-greeter\n' > "$G/index.theme"
 cat > /etc/lightdm/slick-greeter.conf <<'EOF'
 # Chiron Stick login screen (setup/50-rice.sh). A fixed image: changing it with every wallpaper
 # would mean running something as root on every change.
@@ -120,7 +149,7 @@ cat > /etc/lightdm/slick-greeter.conf <<'EOF'
 background=/usr/share/backgrounds/chiron/login.png
 draw-user-backgrounds=false
 draw-grid=false
-theme-name=adw-gtk3-dark
+theme-name=Chiron-greeter
 icon-theme-name=Papirus-Dark
 cursor-theme-name=Bibata-Modern-Classic
 font-name=Noto Sans 11

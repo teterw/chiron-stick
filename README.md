@@ -40,7 +40,9 @@ Each run produces a technical report (Markdown, HTML, JSON) and a one-page **own
 
 ## The desktop
 
-"Clinic Night" is a dark Xfce desktop that takes its colors from the wallpaper. Pick a wallpaper (`Super+W`) and the panel, windows, terminal, app launcher, notifications and folder icons all follow. Every color is contrast-checked, so text stays readable on any wallpaper. The reports' green, yellow and red never change with it. The desktop idles at about 0.9 GB of RAM, and turns its effects off on PCs without working graphics drivers. Wallpapers come from [dharmx/walls](https://github.com/dharmx/walls) (`chiron walls update`).
+"Clinic Night" is a dark Xfce desktop that takes its colors from the wallpaper. `Super+W` opens a full-screen picker: browse the wallpapers and see a live preview of the whole desktop in each one's colors, then press Enter and the preview grows into your new desktop. The panel, windows, terminal, app launcher, notifications and folder icons all follow. Other wallpaper changes slide in behind your windows with animated transitions (grow, wipe, wave or fade). Every color is contrast-checked, so text stays readable on any wallpaper. The reports' green, yellow and red never change with it. The desktop idles at about 0.9 GB of RAM, and turns its effects off on PCs without working graphics drivers. Wallpapers come from [dharmx/walls](https://github.com/dharmx/walls) (`chiron walls update`).
+
+The logo is a constellation: six stars forming a C, with Sagittarius' arrow flying out of it (in the myth, Chiron became that constellation). It's on the boot menu, boot splash and login screen, in Chiron violet.
 
 ## Leaves no trace
 

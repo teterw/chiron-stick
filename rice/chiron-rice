@@ -3,13 +3,15 @@
 from the current wallpaper: wallust extracts a palette, this script checks contrast and turns it into
 GTK, panel, terminal, rofi, btop, conky, starship, fastfetch and folder-icon colours. Runs as the
 desktop user. Verdict colours in chiron's reports never come from here (CLAUDE.md decision 10).
+The picker and the animated wallpaper changes are in chiron-walls.
 
-  chiron-rice apply <image>        set the wallpaper and re-theme everything from it
-  chiron-rice pick                 choose a wallpaper (rofi grid with thumbnails)
+  chiron-rice apply <image>        set the wallpaper (animated) and re-theme everything from it
+  chiron-rice pick                 choose a wallpaper: full-screen picker with a live theme preview
   chiron-rice random               random wallpaper from the current set
   chiron-rice next                 timer tick: random wallpaper (personal mode, not paused)
   chiron-rice mode client|personal calm wallpapers on other people's PCs / the full collection
   chiron-rice pause | resume       stop / restore rotation and the compositor (chiron stress does this)
+  chiron-rice animations on|off    animated wallpaper changes (on by default)
   chiron-rice login                session start: end a leftover pause, compositor on or off, start conky
   chiron-rice status
   chiron-rice thumbs               build the wallpaper thumbnail cache
@@ -21,6 +23,7 @@ import hashlib
 import json
 import os
 import random
+import select
 import shutil
 import subprocess
 import sys
@@ -129,7 +132,7 @@ def mix(a, b, t):
 
 
 BLACK, WHITE = (0, 0, 0), (1, 1, 1)
-BRAND_TEAL = hex2rgb("#2ec4b6")  # the boot branding's accent
+BRAND = hex2rgb("#8b5cf6")  # Chiron violet: the boot branding's accent, and grey wallpapers'
 
 
 def toward(c, target, other, ratio, step=0.04):
@@ -157,10 +160,10 @@ def derive(palette):
         return s * (1 - abs(l - 0.55))  # saturated, mid-light colours make good accents
     candidates = [palette.get(f"color{i}") for i in range(1, 7)] + [palette.get(f"color{i}") for i in range(9, 15)]
     candidates = [c for c in candidates if c]
-    accent = hex2rgb(max(candidates, key=score)) if candidates else BRAND_TEAL
+    accent = hex2rgb(max(candidates, key=score)) if candidates else BRAND
     h, l, s = colorsys.rgb_to_hls(*accent)
-    if s < 0.08:    # grey wallpapers have no hue to keep (it would come out red): use Chiron's teal
-        accent = BRAND_TEAL
+    if s < 0.08:    # grey wallpapers have no hue to keep (it would come out red): use Chiron's violet
+        accent = BRAND
     elif s < 0.25:  # low-colour wallpapers: give the accent some life without changing its hue
         accent = colorsys.hls_to_rgb(h, max(l, 0.55), 0.45)
     accent = toward(accent, WHITE, bg, 3.0)
@@ -342,7 +345,8 @@ def fastfetch_jsonc(c):
     acc = f"38;2;{r};{g};{b}"
     return json.dumps({
         "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
-        "logo": {"type": "file", "source": str(RICE / "fastfetch" / "chiron.txt"), "color": {"1": acc}},
+        "logo": {"type": "file", "source": str(RICE / "fastfetch" / "chiron.txt"),
+                 "color": {"1": acc, "2": "38;2;{};{};{}".format(*(round(x * 255) for x in c["muted"]))}},
         "display": {"color": {"keys": acc, "title": acc}, "separator": "  "},
         # host and cpu by name only: the extras (board version, clock speed) wrap in an 80-column terminal
         "modules": ["title", "separator", "os", {"type": "host", "format": "{name}"}, "kernel", "uptime",
@@ -445,16 +449,29 @@ def set_wallpaper(img):
 
 
 def run_wallust(img):
+    """The wallpaper's 16 colours. wallust just prints them (no config, no templates) and keeps no
+    cache: its own cache takes megabytes per image and would grow with every wallpaper. Ours keeps
+    the 16 colours per image (the picker previews them too, so preview and result always match)."""
+    img = Path(img)
+    st = img.stat()
+    cache = CACHE / "palettes" / (hashlib.sha1(f"{img}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest() + ".json")
+    try:
+        return json.loads(cache.read_text())
+    except (OSError, ValueError):
+        pass
     try:  # not sh(): wallust explains failures on stderr
-        p = subprocess.run(["wallust", "run", "--skip-sequences", "--quiet", str(img)],
-                           capture_output=True, text=True, timeout=60)
-        rc, why = p.returncode, (p.stderr.strip() or p.stdout.strip() or "no output").splitlines()[0]
+        p = subprocess.run(["wallust", "run", "-N", "-s", "-T", "-n", "-q", "-b", "fastresize", "-c", "salience",
+                            "-p", "saliencedark", "-k", "--print-scheme", str(img)], capture_output=True, text=True, timeout=60)
+        rc, why = p.returncode, (p.stderr.strip() or "no output").splitlines()[0]
+        hexes = [l.strip() for l in p.stdout.splitlines() if l.strip().startswith("#")]
     except (OSError, subprocess.TimeoutExpired) as e:
-        rc, why = 1, str(e)
-    colors = CACHE / "wallust-colors.json"
-    if rc != 0 or not colors.exists():
+        rc, why, hexes = 1, str(e), []
+    if rc != 0 or len(hexes) < 16:
         raise SystemExit(f"chiron-rice: wallust couldn't read colours from {img}: {why}")
-    return json.loads(colors.read_text())
+    palette = {f"color{i}": h for i, h in enumerate(hexes[:16])}
+    palette.update(background=hexes[0], foreground=hexes[15], cursor=hexes[7])
+    write_atomic(cache, json.dumps(palette))
+    return palette
 
 
 def gtk_theme_files(c, layout, solid):
@@ -476,11 +493,12 @@ def gtk_theme_files(c, layout, solid):
     return name, files
 
 
-def apply(img, quiet=False):
+def apply(img, quiet=False, transition=None):
+    """transition: animate the change behind the windows (chiron-walls effect name, or "random")."""
     img = Path(img).expanduser().resolve()
     if not img.is_file() or img.suffix.lower() not in IMAGE_EXT:
         raise SystemExit(f"chiron-rice: not an image: {img}")
-    (CACHE / "wallust-colors.json").unlink(missing_ok=True)
+    old = load_state().get("wallpaper")
     # Work out everything before changing anything: if wallust or any step here fails, the old theme
     # stays whole instead of the desktop ending up half-themed.
     palette = run_wallust(img)
@@ -502,6 +520,8 @@ def apply(img, quiet=False):
     folders = papirus_color(c["accent"])
     for path, text in files.items():
         write_atomic(path, text)
+    if transition and start_transition(old, img, transition):
+        time.sleep(0.7)  # let the new wallpaper sweep in halfway, then recolour everything with it
     xfconf("xfce4-terminal", "/color-use-theme", False, "bool")
     xfconf("xfce4-terminal", "/color-foreground", rgb2hex(c["fg"]))
     xfconf("xfce4-terminal", "/color-background", rgb2hex(c["bg"]))
@@ -531,7 +551,47 @@ def apply(img, quiet=False):
         print(f"applied {img.name}: accent {rgb2hex(c['accent'])}, background {rgb2hex(c['bg'])}")
 
 
+TRANSITIONS = []  # running chiron-walls transition processes
+
+
+def start_transition(old, new, effect="random"):
+    """swww-style animated wallpaper change behind the windows (chiron-walls transition). Returns once
+    the animation covers the desktop, so the switch underneath stays hidden. Skipped when animations
+    are off, during a test pause, or without an old wallpaper to animate from."""
+    state = load_state()
+    if (state.get("paused") or not state.get("animations", True) or not old or not Path(old).is_file()
+            or Path(old) == Path(new) or not os.environ.get("DISPLAY")):
+        return False
+    try:
+        p = subprocess.Popen([str(RICE / "chiron-walls"), "transition", str(old), str(new), effect],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return False
+    ready, _, _ = select.select([p.stdout], [], [], 4.0)
+    if not ready or p.stdout.readline().strip() != "ready":
+        p.kill()  # never leave a stuck animation over the desktop
+        return False
+    TRANSITIONS.append(p)
+    return True
+
+
+def finish_transitions():
+    """Wait for running animations: a timer job's processes end with the job."""
+    for p in TRANSITIONS:
+        try:
+            p.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            p.kill()
+
+
 def pick():
+    """The full-screen picker (chiron-walls); rofi if GTK can't start."""
+    rc = subprocess.call([str(RICE / "chiron-walls"), "pick"])
+    if rc == 3:
+        pick_rofi()
+
+
+def pick_rofi():
     state = load_state()
     pics = wallpapers(state.get("mode", "personal"))
     new = build_thumbs(pics, quiet=True)
@@ -668,12 +728,12 @@ def install_user():
         xfconf_array("xfce4-panel", f"{base}/plugin-ids", ids, "int")
     xfconf_array("xfce4-panel", "/panels", panel_ids, "int")
     subprocess.Popen(["xfce4-panel"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    # Static configs (rofi, btop, wallust, bash)
-    for src, dst in ((RICE / "rofi" / "config.rasi", HOME / ".config/rofi/config.rasi"),
-                     (RICE / "wallust" / "wallust.toml", HOME / ".config/wallust/wallust.toml"),
-                     (RICE / "wallust" / "templates" / "colors.json", HOME / ".config/wallust/templates/colors.json")):
+    # Static configs (rofi, btop, bash). wallust needs none (run_wallust passes everything), and its
+    # cache from earlier versions only takes space.
+    for src, dst in ((RICE / "rofi" / "config.rasi", HOME / ".config/rofi/config.rasi"),):
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
+    shutil.rmtree(HOME / ".cache/wallust", ignore_errors=True)
     btop = HOME / ".config/btop/btop.conf"
     btop.parent.mkdir(parents=True, exist_ok=True)
     text = btop.read_text() if btop.exists() else ""
@@ -723,7 +783,7 @@ def restart_conky():
     conky started from the rotation timer would be stopped together with the timer's job."""
     if shutil.which("conky") and (HOME / ".config/conky/chiron.conf").exists():
         sh("systemctl", "--user", "reset-failed", "chiron-conky.service")
-        sh("systemctl", "--user", "restart", "chiron-conky.service")
+        sh("systemctl", "--user", "--no-block", "restart", "chiron-conky.service")  # don't wait: it takes ~1.5 s
 
 
 def login():
@@ -752,22 +812,26 @@ def main(argv):
     cmd = argv[0] if argv else "status"
     state = load_state()
     if cmd == "apply" and len(argv) == 2:
-        apply(argv[1])
+        apply(argv[1], transition="random")
     elif cmd == "pick":
         pick()
     elif cmd == "random":
-        apply(random.choice(wallpapers(state.get("mode", "personal"))))
+        apply(random.choice(wallpapers(state.get("mode", "personal"))), transition="random")
     elif cmd == "next":
         if state.get("mode", "personal") == "personal" and not state.get("paused"):
-            apply(random.choice(wallpapers("personal")), quiet=True)
+            apply(random.choice(wallpapers("personal")), quiet=True, transition="random")
     elif cmd == "mode" and len(argv) == 2 and argv[1] in ("client", "personal"):
         state["mode"] = argv[1]
         save_state(state)
         timer("start" if argv[1] == "personal" and not state.get("paused") else "stop")
-        apply(random.choice(wallpapers(argv[1])))
+        apply(random.choice(wallpapers(argv[1])), transition="random")
         print(f"mode: {argv[1]}" + (" (calm wallpapers, no rotation)" if argv[1] == "client" else ""))
     elif cmd in ("pause", "resume"):
         set_pause(cmd == "pause")
+    elif cmd == "animations" and len(argv) == 2 and argv[1] in ("on", "off"):
+        state["animations"] = argv[1] == "on"
+        save_state(state)
+        print(f"animations: {argv[1]}")
     elif cmd == "login":
         login()
     elif cmd == "thumbs":
@@ -782,6 +846,7 @@ def main(argv):
     else:
         print(__doc__)
         return 2
+    finish_transitions()
     return 0
 
 

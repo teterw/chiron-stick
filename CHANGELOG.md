@@ -4,8 +4,29 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-04
+
+A new look picked by Tete: the constellation logo in Chiron violet, and a wallpaper switcher in the style of Arch Linux rices.
+
+### Added
+- `rice/chiron-walls`: the full-screen wallpaper picker (`Super+W`). It opens by shrinking the current wallpaper into a preview card, shows a live mock of the desktop and the palette in each wallpaper's colours (they morph as you browse), searches as you type, and on Enter grows the card into your new desktop. Esc goes back the same way. rofi stays as a fallback
+- Animated wallpaper changes behind the windows, like swww: grow from the mouse pointer, wipe, wave or fade, with the theme recolouring halfway through. Used by `random` (`Super+Shift+W`), the 30-minute rotation, `apply` and `mode`. `chiron rice animations on|off`
+- New logo: a constellation (six stars forming a C, and Sagittarius' arrow) on a violet night sky, on the boot menu, the boot splash (stars twinkle while it boots; the arrow's star flares at the end), the login screen and in the terminal (braille)
+- Login screen theme `Chiron-greeter` (violet instead of the default blue)
+- `setup/12-boot-tests.sh`: `SHOT_EVERY=N` saves a screenshot every N seconds (boot menu, splash)
+- Tests for reading wallust's colours and the palette cache
+
 ### Changed
-- `setup/50-rice.sh` ends with the Timeshift snapshot `riced`, like the earlier setup scripts
+- The brand accent is Chiron violet `#8b5cf6` instead of teal: boot screens, login screen, and the accent for grey wallpapers
+- wallust prints the 16 colours with no config, no templates and no cache of its own (it had grown to 190 MB); chiron-rice keeps a tiny cache, so preview and result always match
+- Re-theming takes 0.7 s instead of 2.2 s: conky restarts without being waited for
+- `setup/50-rice.sh` skips downloads that are already installed and ends with the Timeshift snapshot `riced`
+
+### Fixed
+- Boot menu on legacy-BIOS PCs (GRUB runs at 640×480 there): entries were cut off
+- After a boot that never finished (e.g. powered off at the unlock prompt) the boot menu waited 30 s instead of 5
+- The console GRUB shows while loading the kernel covered 70% of the screen; it's now a smaller box with a thin violet edge (GRUB keeps it black and centred)
+- The boot splash could show leftover frames of Mint's logo
 
 ## [0.4.0] - 2026-10-04
 

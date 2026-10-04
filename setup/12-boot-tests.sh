@@ -6,7 +6,8 @@
 # Each test VM runs alone on the target disk (CLAUDE.md safety rule 4), is screenshotted once it
 # should have reached the disk unlock prompt, then removed (including its firmware variables).
 # Usage: setup/12-boot-tests.sh [--dry-run] </dev/disk/by-id/usb-...> <drive-serial> [screenshot-dir]
-#   Optional: BOOT_WAIT seconds before the screenshot (default 45)
+#   Optional: BOOT_WAIT seconds before the screenshot (default 45); SHOT_EVERY=N also saves a
+#   screenshot every N seconds until then (<name>-<seconds>s.png), to see the boot menu and splash
 set -eu
 . "$(dirname "$0")/lib/common.sh"
 parse_args "$@"
@@ -37,7 +38,15 @@ boot_test() {
     --network none --graphics spice --import --noautoconsole \
     --check path_in_use=off  # the build VM's definition uses this disk too; we checked nothing is *running* on it
   [ "$DRY_RUN" = 1 ] && { echo "[dry-run] wait ${BOOT_WAIT:-45}s, screenshot to $OUT/$name.png, remove $name"; return; }
-  sleep "${BOOT_WAIT:-45}"
+  if [ -n "${SHOT_EVERY:-}" ]; then
+    local t=0
+    while [ "$t" -lt "${BOOT_WAIT:-45}" ]; do
+      sleep "$SHOT_EVERY"; t=$((t + SHOT_EVERY))
+      $V screenshot "$name" "$OUT/$name-${t}s.png" >/dev/null 2>&1 || true
+    done
+  else
+    sleep "${BOOT_WAIT:-45}"
+  fi
   $V screenshot "$name" "$OUT/$name.png" >/dev/null
   echo "screenshot: $OUT/$name.png (expect the disk unlock prompt)"
   $V destroy "$name" >/dev/null

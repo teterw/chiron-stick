@@ -1,34 +1,45 @@
 # Chiron Stick GRUB theme (setup/50-rice.sh installs it to /boot/grub/themes/chiron)
 desktop-image: "background.png"
-desktop-color: "#0e1417"
+desktop-color: "#0b0a12"
 title-text: ""
 message-font: "DejaVu Sans Regular 16"
-message-color: "#d8e3e6"
+message-color: "#ece9f4"
 terminal-font: "DejaVu Sans Mono Regular 14"
+# The console (shown while the kernel loads, and for the 'c' command line) gets a thin violet edge.
+# GRUB doesn't place it where these lines ask: with them it centres an 80x24 console, which is still
+# smaller than its default box covering 70% of the screen. Inside it stays black.
+terminal-box: "terminal_box_*.png"
+terminal-left: "15%"
+terminal-top: "50%"
+terminal-width: "70%"
+terminal-height: "36%"
+terminal-border: "0"
 
+# Sized for 640x480 too (legacy BIOS often runs GRUB at that size): the longest entry,
+# "Advanced options for Linux Mint 22.3 Xfce", is about 380 px wide at 18 px
 + boot_menu {
-    left = 30%
-    width = 40%
-    top = 52%
-    height = 32%
-    item_font = "DejaVu Sans Regular 20"
-    item_color = "#8fa1a7"
-    selected_item_font = "DejaVu Sans Regular 20"
+    left = 15%
+    width = 70%
+    top = 50%
+    height = 36%
+    item_font = "DejaVu Sans Regular 18"
+    item_color = "#a39fb8"
+    selected_item_font = "DejaVu Sans Regular 18"
     selected_item_color = "#ffffff"
     selected_item_pixmap_style = "select_*.png"
-    item_height = 36
+    item_height = 32
     item_padding = 10
-    item_spacing = 6
+    item_spacing = 4
     scrollbar = false
 }
 
 + label {
     id = "__timeout__"
-    left = 30%
-    width = 40%
-    top = 88%
+    left = 5%
+    width = 90%
+    top = 89%
     align = "center"
-    color = "#6f8288"
+    color = "#8b85a3"
     font = "DejaVu Sans Regular 16"
     text = "Starting in %d s - arrow keys to choose, Enter to start"
 }

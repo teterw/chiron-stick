@@ -1,9 +1,0 @@
-# Chiron Stick: wallust only extracts the palette from the wallpaper; chiron-rice builds every theme
-# file from it (with its own contrast checks), so there's just one template here.
-backend = "fastresize"
-color_space = "salience"
-palette = "saliencedark"
-check_contrast = true
-
-[templates]
-chiron = { template = "colors.json", target = "~/.cache/chiron/wallust-colors.json" }

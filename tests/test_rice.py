@@ -46,7 +46,7 @@ class Colours(unittest.TestCase):
         self.check(GREY)
         h, l, s = rice.colorsys.rgb_to_hls(*rice.derive(GREY)["accent"])
         self.assertGreaterEqual(s, 0.25, "a grey wallpaper still gets an accent with some colour")
-        self.assertTrue(0.4 < h < 0.56, f"pure grey has no hue, so the accent is Chiron teal, not red (hue {h:.2f})")
+        self.assertTrue(0.68 < h < 0.78, f"pure grey has no hue, so the accent is Chiron violet, not red (hue {h:.2f})")
 
 
 class Layout(unittest.TestCase):
@@ -78,6 +78,27 @@ class Apply(unittest.TestCase):
             self.assertEqual([p for p in Path(tmp).rglob("*") if p.is_file() and p != img], [])
             mocks["xfconf"].assert_not_called()
             mocks["sh"].assert_not_called()
+
+
+class Palette(unittest.TestCase):
+    def test_wallust_printout_and_cache(self):
+        """The 16 colours come from wallust's printout (its info line ignored) and are kept in our
+        own small cache, never in wallust's (which grows by megabytes per image)."""
+        hexes = [f"#{i:02x}{i:02x}{i + 5:02x}" for i in range(0, 160, 10)]
+        out = "\x1b[1m[I]\x1b[0m config: Not using a configuration file, using default values.\n" + "\n".join(hexes) + "\n"
+        run = mock.Mock(return_value=mock.Mock(returncode=0, stdout=out, stderr=""))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(rice, "CACHE", Path(tmp)), \
+                mock.patch.object(rice.subprocess, "run", run):
+            img = Path(tmp) / "wall.jpg"
+            img.write_bytes(b"not read: wallust is mocked")
+            p = rice.run_wallust(img)
+            self.assertEqual([p[f"color{i}"] for i in range(16)], hexes)
+            self.assertEqual((p["background"], p["foreground"]), (hexes[0], hexes[15]))
+            self.assertEqual(rice.run_wallust(img), p)
+            self.assertEqual(run.call_count, 1, "the second time comes from the cache")
+            args = run.call_args[0][0]
+            self.assertIn("-n", args)  # wallust's own cache off
+            self.assertIn("--print-scheme", args)
 
 
 if __name__ == "__main__":

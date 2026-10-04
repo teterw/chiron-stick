@@ -65,7 +65,7 @@ The desktop takes its colours from the wallpaper: change the wallpaper and every
 
 | Keys or command | What it does |
 |---|---|
-| `Super+W` | Pick a wallpaper: type to filter, Enter to apply, Esc to cancel |
+| `Super+W` | Pick a wallpaper. ← → browse, type to search, Tab shows the plain picture without the preview, Enter applies, Esc goes back |
 | `Super+Shift+W` | Random wallpaper |
 | `Super+D` | Find and start an app |
 | `Super+Return` | Terminal |
@@ -73,7 +73,7 @@ The desktop takes its colours from the wallpaper: change the wallpaper and every
 | `chiron rice mode personal` | The whole collection, a new wallpaper every 30 minutes |
 | `chiron walls update` | Download or update the wallpaper collection (about 3 GB) |
 
-The stress tests pause wallpaper changes and desktop effects by themselves (`chiron rice pause` and `chiron rice resume` do it by hand). On PCs without working graphics drivers, and in virtual machines, desktop effects stay off so the desktop stays quick.
+The stress tests pause wallpaper changes and desktop effects by themselves (`chiron rice pause` and `chiron rice resume` do it by hand). On PCs without working graphics drivers, and in virtual machines, desktop effects stay off so the desktop stays quick. `chiron rice animations off` turns off the animated wallpaper changes too.
 
 ## 5. Leave without a trace
 
