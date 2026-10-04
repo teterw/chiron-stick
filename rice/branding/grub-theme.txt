@@ -1,5 +1,10 @@
 # Chiron Stick GRUB theme (setup/50-rice.sh installs it to /boot/grub/themes/chiron)
 desktop-image: "background.png"
+# The picture is 16:9. Scaled to the screen's height and centred, the logo stays round on 4:3 and
+# 16:10 modes too (the sky is cropped at the sides); stretching squashed it
+desktop-image-scale-method: "fitheight"
+desktop-image-h-align: "center"
+desktop-image-v-align: "center"
 desktop-color: "#0b0a12"
 title-text: ""
 message-font: "DejaVu Sans Regular 16"
@@ -33,13 +38,17 @@ terminal-border: "0"
     scrollbar = false
 }
 
-+ label {
+# With Secure Boot GRUB may not load font files (shim_lock policy), so its own text is in the built-in
+# pixel font. The countdown is a thin bar instead (it fills, then the stick starts), and the key hint
+# is drawn smooth into background.png just below it (make-assets.py). GRUB makes a progress bar at
+# least 28 px tall, so the line is drawn by 28 px pictures that are clear above and below it.
++ progress_bar {
     id = "__timeout__"
-    left = 5%
-    width = 90%
-    top = 89%
-    align = "center"
-    color = "#8b85a3"
-    font = "DejaVu Sans Regular 16"
-    text = "Starting in %d s - arrow keys to choose, Enter to start"
+    left = 40%
+    width = 20%
+    top = 87%
+    height = 28
+    show_text = false
+    bar_style = "track_*.png"
+    highlight_style = "fill_*.png"
 }

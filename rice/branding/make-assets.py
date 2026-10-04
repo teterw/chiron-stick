@@ -2,7 +2,7 @@
 """Draw the Chiron Stick boot branding (our own art, so no image files live in the repo): the
 constellation logo, six stars forming a C with Sagittarius' arrow flying out of it (Chiron became
 that constellation), on a violet night sky. Usage: make-assets.py <output dir>
-Writes logo.png, background.png (GRUB + login screen), select_*.png (GRUB menu highlight),
+Writes logo.png, background.png (GRUB), login.png (login screen), select_*.png (GRUB menu highlight),
 terminal_box_*.png (GRUB console) and plymouth/ (boot splash frames, watermark, password bullet).
 Boot branding is static: it doesn't follow the wallpaper (it runs before anyone logs in)."""
 import math
@@ -143,13 +143,23 @@ def wordmark(im, cx, y, size, sub_size):
     d.text((cx - d.textlength(sub, font=fs) / 2, y + size * 1.45), sub, font=fs, fill=lerp(VIOLET, FG, 0.35))
 
 
-def background(w=1920, h=1080):
+GRUB_HINT = "Arrow keys to choose  ·  Enter to start"  # Noto Sans has no arrow glyphs
+
+
+def background(w=1920, h=1080, hint=None):
+    """hint: text drawn into the picture under the boot menu. With Secure Boot, GRUB refuses to load
+    font files (shim_lock policy), so everything it writes itself is in its built-in pixel font:
+    text that never changes looks better drawn here, smooth."""
     logo_px = int(h * 0.26)
     top = int(h * 0.06)
     im = sky(w, h, clear=(w / 2 - logo_px * 0.6, top, w / 2 + logo_px * 0.6, h * 0.47))
     lg = constellation(logo_px)
     im.alpha_composite(lg, (w // 2 - logo_px // 2, top))
     wordmark(im, w / 2, top + logo_px + h * 0.01, int(h * 0.05), int(h * 0.02))
+    if hint:
+        d = ImageDraw.Draw(im)
+        f = ImageFont.truetype(FONT, int(h * 0.017))
+        d.text((w / 2 - d.textlength(hint, font=f) / 2, h * 0.905), hint, font=f, fill=MUTED)
     return im.convert("RGB")
 
 
@@ -157,13 +167,20 @@ def main(out):
     out = Path(out)
     (out / "plymouth").mkdir(parents=True, exist_ok=True)
     constellation(256).save(out / "logo.png")
-    background().save(out / "background.png")
+    background(hint=GRUB_HINT).save(out / "background.png")
+    background().save(out / "login.png")
     # GRUB menu highlight, and the console box (9 slices): a dark card with a thin violet edge
     Image.new("RGBA", (8, 8), VIOLET + (80,)).save(out / "select_c.png")
     Image.new("RGBA", (5, 8), lerp(VIOLET, PINK, 0.3) + (255,)).save(out / "select_w.png")
     for part, size in (("c", (8, 8)), ("n", (8, 1)), ("s", (8, 1)), ("e", (1, 8)), ("w", (1, 8)),
                        ("ne", (1, 1)), ("nw", (1, 1)), ("se", (1, 1)), ("sw", (1, 1))):
         Image.new("RGBA", size, CARD + (255,) if part == "c" else VIOLET + (120,)).save(out / f"terminal_box_{part}.png")
+    # Countdown bar: GRUB makes progress bars at least 28 px tall, so the track and its fill are
+    # 28 px pictures that are see-through except for a thin line through the middle
+    for name, col in (("track", (42, 35, 64, 255)), ("fill", VIOLET + (255,))):
+        bar = Image.new("RGBA", (8, 28), (0, 0, 0, 0))
+        ImageDraw.Draw(bar).rectangle([0, 13, 7, 15], fill=col)
+        bar.save(out / f"{name}_c.png")
     # Plymouth two-step: the throbber loops while it boots (a wave of light runs through the stars),
     # the animation plays once at the end (the arrow's star flares)
     n_stars = len(C_STARS) + len(ARROW)

@@ -108,12 +108,15 @@ echo "===== 5. Boot branding: GRUB theme, Plymouth splash + unlock screen, login
 python3 /opt/chiron/rice/branding/make-assets.py "$W/assets"
 T=/boot/grub/themes/chiron
 install -d "$T"
-install -m 0644 "$W/assets/background.png" "$W/assets/"select_*.png "$W/assets/"terminal_box_*.png "$T/"
+install -m 0644 "$W/assets/background.png" "$W/assets/"select_*.png "$W/assets/"terminal_box_*.png "$W/assets/"track_*.png "$W/assets/"fill_*.png "$T/"
 install -m 0644 /opt/chiron/rice/branding/grub-theme.txt "$T/theme.txt"
 rm -f "$T"/dejavu-sans-*.pf2  # GRUB loads every font in the theme folder at boot, so no leftovers
 for size in 16 18; do grub-mkfont -s $size -o "$T/dejavu-sans-$size.pf2" /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; done
 grub-mkfont -s 14 -o "$T/dejavu-sans-mono-14.pf2" /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
-printf '# Chiron Stick boot menu theme (setup/50-rice.sh)\nGRUB_THEME=%s/theme.txt\n' "$T" > /etc/default/grub.d/99-chiron-theme.cfg
+# GRUB's "auto" keeps the mode the firmware was in, and many desktops show their logo at 1024x768
+# or 800x600: a big Full HD monitor then stretches the menu and the boot splash (which keeps GRUB's
+# mode) into a blur. Full HD when the graphics firmware offers it, else as before.
+printf '# Chiron Stick boot menu theme (setup/50-rice.sh)\nGRUB_THEME=%s/theme.txt\nGRUB_GFXMODE=1920x1080,auto\n' "$T" > /etc/default/grub.d/99-chiron-theme.cfg
 update-grub 2>&1 | grep -E "theme|Found theme" || true
 
 P=/usr/share/plymouth/themes/chiron
@@ -131,7 +134,7 @@ update-alternatives --set default.plymouth "$P/chiron.plymouth"
 update-initramfs -u -k all 2>&1 | tail -n 2
 
 install -d /usr/share/backgrounds/chiron
-install -m 0644 "$W/assets/background.png" /usr/share/backgrounds/chiron/login.png
+install -m 0644 "$W/assets/login.png" /usr/share/backgrounds/chiron/login.png
 # The login screen's own theme: adw-gtk3-dark with Chiron violet instead of its default blue
 G=/usr/share/themes/Chiron-greeter
 install -d "$G/gtk-3.0"
