@@ -30,7 +30,7 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "[dry-run] build the missing Papirus icon caches"
   echo "[dry-run] verified downloads: adw-gtk3 v6.5, fastfetch 2.69.0, starship 1.26.0, JetBrainsMono Nerd Font 3.5.1"
   echo "[dry-run] build wallust $WALLUST_VERSION from crates.io (--locked), then remove the Rust toolchain"
-  echo "[dry-run] install rice to /opt/chiron/rice; GRUB theme, Plymouth splash, login screen"
+  echo "[dry-run] install rice to /opt/chiron/rice; GRUB theme, Plymouth splash, login screen; snapshot 'riced'"
   exit 0
 fi
 
@@ -126,4 +126,8 @@ cursor-theme-name=Bibata-Modern-Classic
 font-name=Noto Sans 11
 show-hostname=true
 EOF
+
+echo "===== 6. Snapshot riced (system only: Timeshift leaves @home out, where the user part goes)"
+if timeshift --list --scripted 2>/dev/null | grep -qw riced; then echo "snapshot 'riced' already exists"
+else timeshift --create --scripted --comments riced --tags O; fi
 echo "System part done. Next, as the desktop user in their session: setup/51-rice-user.sh"

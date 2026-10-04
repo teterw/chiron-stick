@@ -4,6 +4,9 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+### Changed
+- `setup/50-rice.sh` ends with the Timeshift snapshot `riced`, like the earlier setup scripts
+
 ## [0.4.0] - 2026-10-04
 
 Phase 4R: the "Clinic Night" desktop theme. The whole desktop takes its colours from the wallpaper.
