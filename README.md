@@ -4,11 +4,11 @@ A portable Linux "PC doctor" on a USB SSD. Plug it into a PC or laptop (with the
 
 Named after Chiron, the wise centaur of Greek myth, a healer and teacher.
 
-> **Status:** in development. The stick boots with Secure Boot and the health-check commands work; the desktop theme and real-hardware testing are still to come.
+> **Status:** in development. The stick boots with Secure Boot, the health-check commands work and the desktop theme is done; real-hardware testing is next.
 
 ## The `chiron` command
 
-Everything Chiron Stick adds is one command, `chiron`. The `rice` and `walls` commands arrive with the desktop theme.
+Everything Chiron Stick adds is one command, `chiron`.
 
 | Command | What it does |
 |---|---|
@@ -37,6 +37,10 @@ Everything Chiron Stick adds is one command, `chiron`. The `rice` and `walls` co
 - **Device support:** tells "no Linux driver on this stick" apart from "actually broken"
 
 Each run produces a technical report (Markdown, HTML, JSON) and a one-page **owner summary in Thai and English**.
+
+## The desktop
+
+"Clinic Night" is a dark Xfce desktop that takes its colors from the wallpaper. Pick a wallpaper (`Super+W`) and the panel, windows, terminal, app launcher, notifications and folder icons all follow. Every color is contrast-checked, so text stays readable on any wallpaper. The reports' green, yellow and red never change with it. The desktop idles at about 0.9 GB of RAM, and turns its effects off on PCs without working graphics drivers. Wallpapers come from [dharmx/walls](https://github.com/dharmx/walls) (`chiron walls update`).
 
 ## Leaves no trace
 
@@ -73,6 +77,8 @@ On the stick (in the VM, as root, from a copy of this repo):
 6. `setup/20-toolkit.sh`: the diagnostic tools
 7. `setup/30-chiron.sh`: the `chiron` command
 8. `setup/40-memtest86.sh`: MemTest86 in the boot menu (downloaded and signature-checked; never redistributed)
+9. `setup/50-rice.sh`: the desktop theme's system part (packages, checksum-verified downloads, boot and login screens)
+10. `setup/51-rice-user.sh`, as the desktop user inside the desktop session: panels, keys and theme. Then `chiron walls update` downloads the wallpapers (about 3 GB).
 
 Back on the host: `setup/12-boot-tests.sh` boots the stick in fresh UEFI (Secure Boot) and legacy-BIOS test VMs.
 

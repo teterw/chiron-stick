@@ -1,0 +1,789 @@
+#!/usr/bin/env python3
+"""chiron-rice: the Chiron Stick desktop theme ("Clinic Night"). The whole desktop takes its colours
+from the current wallpaper: wallust extracts a palette, this script checks contrast and turns it into
+GTK, panel, terminal, rofi, btop, conky, starship, fastfetch and folder-icon colours. Runs as the
+desktop user. Verdict colours in chiron's reports never come from here (CLAUDE.md decision 10).
+
+  chiron-rice apply <image>        set the wallpaper and re-theme everything from it
+  chiron-rice pick                 choose a wallpaper (rofi grid with thumbnails)
+  chiron-rice random               random wallpaper from the current set
+  chiron-rice next                 timer tick: random wallpaper (personal mode, not paused)
+  chiron-rice mode client|personal calm wallpapers on other people's PCs / the full collection
+  chiron-rice pause | resume       stop / restore rotation and the compositor (chiron stress does this)
+  chiron-rice login                session start: end a leftover pause, compositor on or off, start conky
+  chiron-rice status
+  chiron-rice thumbs               build the wallpaper thumbnail cache
+  chiron-rice install-user         one-time desktop setup for this user (panels, keys, fonts, autostart)
+"""
+import colorsys
+import configparser
+import hashlib
+import json
+import os
+import random
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+RICE = Path(__file__).resolve().parent
+HOME = Path.home()
+WALLS = HOME / "Pictures" / "walls"
+CACHE = HOME / ".cache" / "chiron"
+STATE = HOME / ".config" / "chiron" / "rice.json"
+FALLBACK_WALLS = Path("/usr/share/backgrounds")  # works offline until `chiron walls update` ran
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+GTK_THEME = "adw-gtk3-dark"
+ICON_THEME = "Papirus-Chiron"
+
+
+# ---------------------------------------------------------------- environment / small helpers
+
+def session_env():
+    """Make xfconf/X tools work from timers, autostart and sudo-launched calls too."""
+    uid = os.getuid()
+    os.environ.setdefault("DISPLAY", ":0")
+    os.environ.setdefault("XAUTHORITY", str(HOME / ".Xauthority"))
+    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
+    os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+
+
+def sh(*cmd, check=False, timeout=60, **kw):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        if check:
+            raise SystemExit(f"chiron-rice: {cmd[0]} failed: {e}")
+        return 1, ""
+    if check and p.returncode != 0:
+        raise SystemExit(f"chiron-rice: {' '.join(cmd)} failed: {(p.stderr or p.stdout).strip()[-300:]}")
+    return p.returncode, p.stdout
+
+
+def xfconf(channel, prop, value, kind="string"):
+    """Set (creating if needed) one xfconf property. kind: string/int/bool/uint/double."""
+    if isinstance(value, bool):
+        value = "true" if value else "false"
+    sh("xfconf-query", "-c", channel, "-p", prop, "-n", "-t", kind, "-s", str(value))
+
+
+def xfconf_array(channel, prop, values, kind="int"):
+    args = []
+    for v in values:
+        args += ["-t", kind, "-s", str(v)]
+    sh("xfconf-query", "-c", channel, "-p", prop, "-n", "-a", *args)
+
+
+def xfconf_get(channel, prop):
+    rc, out = sh("xfconf-query", "-c", channel, "-p", prop)
+    return out.strip() if rc == 0 else None
+
+
+def write_atomic(path, text):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def load_state():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {"mode": "personal", "paused": False}
+
+
+def save_state(state):
+    write_atomic(STATE, json.dumps(state, indent=1) + "\n")
+
+
+# ---------------------------------------------------------------- colours
+
+def hex2rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def rgb2hex(c):
+    return "#" + "".join(f"{round(max(0, min(1, x)) * 255):02x}" for x in c)
+
+
+def luminance(c):
+    def lin(x):
+        return x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(x) for x in c)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(a, b):
+    la, lb = sorted((luminance(a), luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def mix(a, b, t):
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+BLACK, WHITE = (0, 0, 0), (1, 1, 1)
+BRAND_TEAL = hex2rgb("#2ec4b6")  # the boot branding's accent
+
+
+def toward(c, target, other, ratio, step=0.04):
+    """Move colour c toward `target` until its contrast against `other` reaches `ratio`."""
+    orig, t = c, 0.0
+    while contrast(c, other) < ratio and t < 1:
+        t = min(1.0, t + step)
+        c = mix(orig, target, t)
+    return c
+
+
+def derive(palette):
+    """Wallust palette -> the colours the desktop uses, with readable contrast guaranteed:
+    background always dark, text >= 7:1 against it, accent >= 3:1 (WCAG AAA text / UI components)."""
+    bg = hex2rgb(palette["background"])
+    if luminance(bg) > 0.03:
+        bg = mix(bg, BLACK, 0.6)  # Clinic Night is always dark
+    while luminance(bg) > 0.03:
+        bg = mix(bg, BLACK, 0.2)
+    fg = toward(hex2rgb(palette["foreground"]), WHITE, bg, 7.0)
+
+    def score(h):
+        c = hex2rgb(h)
+        _, l, s = colorsys.rgb_to_hls(*c)
+        return s * (1 - abs(l - 0.55))  # saturated, mid-light colours make good accents
+    candidates = [palette.get(f"color{i}") for i in range(1, 7)] + [palette.get(f"color{i}") for i in range(9, 15)]
+    candidates = [c for c in candidates if c]
+    accent = hex2rgb(max(candidates, key=score)) if candidates else BRAND_TEAL
+    h, l, s = colorsys.rgb_to_hls(*accent)
+    if s < 0.08:    # grey wallpapers have no hue to keep (it would come out red): use Chiron's teal
+        accent = BRAND_TEAL
+    elif s < 0.25:  # low-colour wallpapers: give the accent some life without changing its hue
+        accent = colorsys.hls_to_rgb(h, max(l, 0.55), 0.45)
+    accent = toward(accent, WHITE, bg, 3.0)
+    on_accent = BLACK if contrast(accent, BLACK) >= contrast(accent, WHITE) else WHITE
+    surface = mix(bg, fg, 0.07)
+    surface2 = mix(bg, fg, 0.14)
+    muted = toward(mix(fg, bg, 0.45), WHITE, bg, 4.5)
+    term = []
+    for i in range(16):
+        c = hex2rgb(palette.get(f"color{i}", "#808080"))
+        if i not in (0, 8):
+            c = toward(c, WHITE, bg, 4.5)  # every terminal colour readable on the background
+        term.append(c)
+    return {"bg": bg, "fg": fg, "accent": accent, "on_accent": on_accent, "surface": surface,
+            "surface2": surface2, "muted": muted, "term": term}
+
+
+# ---------------------------------------------------------------- wallpaper collection
+
+def wallsets():
+    cfg = configparser.ConfigParser()
+    cfg.read(RICE / "wallsets.conf")
+    sets = {}
+    for name in ("personal", "client"):
+        sec = cfg[name] if name in cfg else {}
+        sets[name] = {"include": (sec.get("include") or "").split(), "exclude": (sec.get("exclude") or "").split()}
+    return sets
+
+
+def wallpapers(mode):
+    s = wallsets()[mode]
+    pics = []
+    if WALLS.is_dir():
+        for cat in sorted(p for p in WALLS.iterdir() if p.is_dir() and not p.name.startswith(".")):
+            if (s["include"] and cat.name not in s["include"]) or cat.name in s["exclude"]:
+                continue
+            pics += [p for p in sorted(cat.rglob("*")) if p.suffix.lower() in IMAGE_EXT]
+    if not pics:
+        pics = [p for p in sorted(FALLBACK_WALLS.rglob("*")) if p.suffix.lower() in IMAGE_EXT]
+    return pics
+
+
+def thumb_path(img):
+    return CACHE / "thumbs" / (hashlib.sha1(str(img).encode()).hexdigest() + ".jpg")
+
+
+def build_thumbs(pics, quiet=False):
+    from PIL import Image, ImageOps
+    todo = [p for p in pics if not thumb_path(p).exists()]
+    (CACHE / "thumbs").mkdir(parents=True, exist_ok=True)
+    for n, p in enumerate(todo, 1):
+        try:
+            with Image.open(p) as im:
+                ImageOps.fit(im.convert("RGB"), (320, 180)).save(thumb_path(p), quality=82)
+        except Exception:  # noqa: BLE001 - a broken image just gets no thumbnail
+            continue
+        if not quiet and n % 100 == 0:
+            print(f"thumbnails: {n}/{len(todo)}")
+    return len(todo)
+
+
+# ---------------------------------------------------------------- rendering
+
+def gtk_css(c, layout, solid_panel):
+    hx = {k: rgb2hex(v) for k, v in c.items() if k != "term"}
+    names = {"accent_color": "accent", "accent_bg_color": "accent", "accent_fg_color": "on_accent",
+             "window_bg_color": "bg", "window_fg_color": "fg", "view_bg_color": "surface", "view_fg_color": "fg",
+             "headerbar_bg_color": "surface", "headerbar_fg_color": "fg", "headerbar_border_color": "accent",
+             "headerbar_backdrop_color": "bg", "sidebar_bg_color": "surface", "sidebar_fg_color": "fg",
+             "card_bg_color": "surface", "card_fg_color": "fg", "dialog_bg_color": "surface", "dialog_fg_color": "fg",
+             "popover_bg_color": "surface2", "popover_fg_color": "fg", "theme_selected_bg_color": "accent",
+             "theme_selected_fg_color": "on_accent"}
+    out = ["/* Generated by chiron-rice from the current wallpaper. Edits are overwritten. */"]
+    out += [f"@define-color {n} {hx[k]};" for n, k in names.items()]
+    panel_bg = hx["bg"] if solid_panel else "transparent"
+    out += ["", f"#XfcePanelWindow {{ background-color: {panel_bg}; }}",
+            f"#XfcePanelWindow, #XfcePanelWindow label, #XfcePanelWindow button {{ color: {hx['fg']}; }}",
+            f"#XfcePanelWindow button:hover {{ background-color: alpha({hx['accent']}, 0.25); }}",
+            f"#XfcePanelWindow button:checked {{ background-color: {hx['accent']}; color: {hx['on_accent']}; }}"]
+    # A panel plugin's own widget doesn't paint; its direct child (box or button) does, so islands are
+    # drawn on "#plugin-N > *". systemload paints one level deeper (a box per graph), so its first and
+    # last inner box carry the island's ends (tested on xfce4-panel 4.18).
+    deeper = ("systemload",)
+    for island in islands(layout):
+        sel = [f"#{w} > * > *" if w.rsplit("-", 1)[0] in deeper else f"#{w} > *" for w in island["widgets"]]
+        if island["panel"] == "dock":
+            out.append(f"{', '.join(sel)} {{ background-color: transparent; padding: 0 4px; }}")
+            continue
+        out.append(f"{', '.join(sel)} {{ background-color: {hx['surface']}; border-radius: 0; margin-top: 3px; margin-bottom: 3px; padding: 0 3px; }}")
+        first, last = sel[0], sel[-1]
+        if first.endswith("> * > *"):
+            first += ":first-child"
+        if last.endswith("> * > *"):
+            last += ":last-child"
+        out.append(f"{first} {{ border-left: 3px solid {hx['accent']}; border-top-left-radius: 4px; border-bottom-left-radius: 4px; margin-left: 6px; }}")
+        out.append(f"{last} {{ border-right: 3px solid {hx['accent']}; border-top-right-radius: 4px; border-bottom-right-radius: 4px; }}")
+    out += ["", f"#XfceNotifyWindow {{ background-color: {hx['surface']}; color: {hx['fg']}; border: 2px solid {hx['accent']}; border-radius: 6px; }}",
+            f"#XfceNotifyWindow label#summary {{ color: {hx['accent']}; font-weight: bold; }}"]
+    return "\n".join(out) + "\n"
+
+
+def rofi_colors(c):
+    hx = {k: rgb2hex(v) for k, v in c.items() if k != "term"}
+    # rofi property names can't contain "_", hence on-accent
+    return ("/* Generated by chiron-rice */\n* {\n" + "".join(
+        f"    {k.replace('_', '-')}: {hx[k]};\n" for k in ("bg", "fg", "accent", "on_accent", "surface", "surface2", "muted")) + "}\n")
+
+
+def btop_theme(c):
+    hx = {k: rgb2hex(v) for k, v in c.items() if k != "term"}
+    pairs = {"main_bg": "", "main_fg": hx["fg"], "title": hx["fg"], "hi_fg": hx["accent"], "selected_bg": hx["surface2"],
+             "selected_fg": hx["accent"], "inactive_fg": hx["muted"], "graph_text": hx["muted"], "meter_bg": hx["surface2"],
+             "proc_misc": hx["accent"], "cpu_box": hx["accent"], "mem_box": hx["accent"], "net_box": hx["accent"],
+             "proc_box": hx["accent"], "div_line": hx["surface2"], "temp_start": hx["accent"], "temp_mid": hx["accent"],
+             "temp_end": hx["fg"], "cpu_start": hx["accent"], "cpu_mid": hx["accent"], "cpu_end": hx["fg"],
+             "free_start": hx["accent"], "free_mid": hx["accent"], "free_end": hx["fg"], "cached_start": hx["muted"],
+             "cached_mid": hx["muted"], "cached_end": hx["fg"], "available_start": hx["accent"], "available_mid": hx["accent"],
+             "available_end": hx["fg"], "used_start": hx["accent"], "used_mid": hx["accent"], "used_end": hx["fg"],
+             "download_start": hx["accent"], "download_mid": hx["accent"], "download_end": hx["fg"],
+             "upload_start": hx["accent"], "upload_mid": hx["accent"], "upload_end": hx["fg"],
+             "process_start": hx["accent"], "process_mid": hx["accent"], "process_end": hx["fg"]}
+    return "# Generated by chiron-rice\n" + "".join(f'theme[{k}]="{v}"\n' for k, v in pairs.items())
+
+
+def conky_conf(c, argb):
+    hx = {k: rgb2hex(v) for k, v in c.items() if k != "term"}
+    return f"""-- Generated by chiron-rice from the current wallpaper. Edits are overwritten.
+conky.config = {{
+    alignment = 'top_right', gap_x = 24, gap_y = 52, minimum_width = 230, maximum_width = 230,
+    own_window = true, own_window_type = 'desktop', own_window_class = 'Conky',
+    own_window_hints = 'undecorated,below,sticky,skip_taskbar,skip_pager',
+    own_window_argb_visual = {str(argb).lower()}, own_window_argb_value = 215, own_window_colour = '{hx['surface'][1:]}',
+    double_buffer = true, use_xft = true, font = 'JetBrainsMono Nerd Font:size=10',
+    default_color = '{hx['fg'][1:]}', color1 = '{hx['accent'][1:]}', color2 = '{hx['muted'][1:]}',
+    draw_borders = false, draw_shades = false, draw_outline = false, border_inner_margin = 10,
+    update_interval = 2, cpu_avg_samples = 2, net_avg_samples = 2,
+}}
+conky.text = [[
+${{color1}}CHIRON ${{color2}}${{hr 1}}
+${{color}}CPU ${{alignr}}${{cpu cpu0}}%  ${{execi 10 /opt/chiron/rice/chiron-rice cputemp}}
+${{color1}}${{cpugraph cpu0 22,210 {hx['accent'][1:]} {hx['accent'][1:]}}}
+${{color}}RAM ${{alignr}}${{mem}} / ${{memmax}}
+${{color}}Disk / ${{alignr}}${{fs_used /}} / ${{fs_size /}}
+${{color}}Up ${{alignr}}${{uptime_short}}
+${{color2}}${{nodename}} ${{alignr}}${{time %H:%M}}
+]]
+"""
+
+
+def starship_toml(c):
+    hx = {k: rgb2hex(v) for k, v in c.items() if k != "term"}
+    return f"""# Generated by chiron-rice from the current wallpaper. Edits are overwritten.
+palette = "chiron"
+format = "$directory$git_branch$git_status$cmd_duration$status$character"
+add_newline = false
+
+[palettes.chiron]
+accent = "{hx['accent']}"
+fg = "{hx['fg']}"
+muted = "{hx['muted']}"
+
+[directory]
+style = "bold accent"
+[git_branch]
+style = "muted"
+[character]
+success_symbol = "[❯](accent)"
+error_symbol = "[❯](bold red)"
+[status]
+disabled = false
+style = "red"
+[cmd_duration]
+style = "muted"
+"""
+
+
+def fastfetch_jsonc(c):
+    r, g, b = (round(x * 255) for x in c["accent"])
+    acc = f"38;2;{r};{g};{b}"
+    return json.dumps({
+        "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+        "logo": {"type": "file", "source": str(RICE / "fastfetch" / "chiron.txt"), "color": {"1": acc}},
+        "display": {"color": {"keys": acc, "title": acc}, "separator": "  "},
+        # host and cpu by name only: the extras (board version, clock speed) wrap in an 80-column terminal
+        "modules": ["title", "separator", "os", {"type": "host", "format": "{name}"}, "kernel", "uptime",
+                    {"type": "cpu", "format": "{name}"}, "gpu", "memory", "disk", "battery", "break", "colors"]},
+                      indent=1) + "\n"
+
+
+# Papirus folder colours and their approximate RGB, to pick the one nearest the accent
+PAPIRUS = {"blue": "#5294e2", "bluegrey": "#607d8b", "brown": "#ae8e6c", "cyan": "#00bcd4", "darkcyan": "#45abb7",
+           "deeporange": "#eb6637", "green": "#87b158", "grey": "#8e8e8e", "indigo": "#5c6bc0", "magenta": "#ca71df",
+           "orange": "#ee923a", "pink": "#f06292", "red": "#e25252", "teal": "#16a085", "violet": "#7e57c2",
+           "yellow": "#f9bd30", "palebrown": "#d1bfae", "paleorange": "#eecaab", "carmine": "#a30002", "nordic": "#81a1c1"}
+
+
+def papirus_color(accent):
+    base = Path("/usr/share/icons/Papirus/48x48/places")
+    have = {n for n in PAPIRUS if (base / f"folder-{n}.svg").exists()}
+    h1, l1, s1 = colorsys.rgb_to_hls(*accent)
+
+    def dist(name):
+        h2, l2, s2 = colorsys.rgb_to_hls(*hex2rgb(PAPIRUS[name]))
+        dh = min(abs(h1 - h2), 1 - abs(h1 - h2))
+        return dh * 3 + abs(l1 - l2) + abs(s1 - s2) * (1.5 if s1 < 0.2 else 0.5)
+    return min(have or {"blue"}, key=dist)
+
+
+def papirus_overlay(color):
+    """Per-user icon theme that inherits Papirus-Dark and only re-points the folder icons to `color`
+    (what papirus-folders does, without root and without touching the system theme)."""
+    src = Path("/usr/share/icons/Papirus")
+    dst = HOME / ".local" / "share" / "icons" / ICON_THEME
+    if not src.is_dir():
+        return
+    dirs = []
+    sizes = [p for p in src.iterdir() if p.is_dir() and (p / "places").is_dir()
+             and (p.name == "symbolic" or (p.name[0].isdigit() and "@" not in p.name))]
+    for size_dir in sorted(sizes):
+        out = dst / size_dir.name / "places"
+        shutil.rmtree(out, ignore_errors=True)
+        out.mkdir(parents=True, exist_ok=True)
+        for link in (size_dir / "places").iterdir():
+            if not link.is_symlink():
+                continue
+            # Follow the whole chain (folder-videos -> folder-blue-videos, some via a second link)
+            target = Path(os.path.realpath(link)).name
+            if "-blue" in target:  # Papirus' default folder colour
+                new = size_dir / "places" / target.replace("-blue", f"-{color}")
+                if new.exists():
+                    (out / link.name).symlink_to(new)
+        dirs.append(f"{size_dir.name}/places")
+    write_atomic(dst / "index.theme", "[Icon Theme]\nName=Papirus-Chiron\nComment=Papirus-Dark with folders in the wallpaper's colour\n"
+                 # Papirus-Dark is complete on its own: also inheriting Papirus would make every GTK
+                 # program index that theme too
+                 "Inherits=Papirus-Dark,hicolor\n" f"Directories={','.join(dirs)}\n\n" +
+                 "".join(f"[{d}]\nContext=Places\nSize={int(d.split('x')[0]) if d[0].isdigit() else 48}\nType=Fixed\n\n"
+                         if d[0].isdigit() else f"[{d}]\nContext=Places\nSize=48\nType=Scalable\nMinSize=8\nMaxSize=512\n\n"
+                         for d in dirs))
+    sh("gtk-update-icon-cache", "-f", "-q", str(dst))
+
+
+# ---------------------------------------------------------------- panel layout
+
+def load_layout():
+    return json.loads((RICE / "panel-layout.json").read_text())
+
+
+def islands(layout):
+    """Plugin ids are given in order across all panels, so setup and CSS agree without lookups."""
+    out, pid = [], 0
+    for panel in layout["panels"]:
+        for item in panel["items"]:
+            if item == "expand":
+                pid += 1
+                continue
+            widgets = []
+            for plugin in item:
+                pid += 1
+                kind = plugin.split(":")[0]
+                widgets.append(f"{kind}-{pid}")
+            out.append({"panel": panel["name"], "widgets": widgets})
+    return out
+
+
+# ---------------------------------------------------------------- applying
+
+def compositing():
+    return xfconf_get("xfwm4", "/general/use_compositing") == "true"
+
+
+def set_wallpaper(img):
+    rc, out = sh("xfconf-query", "-c", "xfce4-desktop", "-l")
+    props = [p for p in out.split() if p.endswith("/last-image")] if rc == 0 else []
+    if not props:
+        rc, mons = sh("xrandr", "--listmonitors")
+        names = [l.split()[-1] for l in mons.splitlines()[1:]] if rc == 0 else ["Virtual-1"]
+        props = [f"/backdrop/screen0/monitor{n}/workspace{w}/last-image" for n in names for w in range(4)]
+    for p in props:
+        xfconf("xfce4-desktop", p, str(img))
+        xfconf("xfce4-desktop", p.replace("last-image", "image-style"), 5, "int")  # zoomed
+
+
+def run_wallust(img):
+    try:  # not sh(): wallust explains failures on stderr
+        p = subprocess.run(["wallust", "run", "--skip-sequences", "--quiet", str(img)],
+                           capture_output=True, text=True, timeout=60)
+        rc, why = p.returncode, (p.stderr.strip() or p.stdout.strip() or "no output").splitlines()[0]
+    except (OSError, subprocess.TimeoutExpired) as e:
+        rc, why = 1, str(e)
+    colors = CACHE / "wallust-colors.json"
+    if rc != 0 or not colors.exists():
+        raise SystemExit(f"chiron-rice: wallust couldn't read colours from {img}: {why}")
+    return json.loads(colors.read_text())
+
+
+def gtk_theme_files(c, layout, solid):
+    """GTK3 programs read ~/.config/gtk-3.0/gtk.css only at startup, but re-read a *theme* whenever the
+    theme changes. So the colours live in a generated theme kept in two copies, Chiron-a and Chiron-b:
+    write the one not in use, then switch to it, and every running program restyles at once.
+    Returns the theme name and its files ({path: text})."""
+    current = xfconf_get("xsettings", "/Net/ThemeName")
+    name = "Chiron-b" if current == "Chiron-a" else "Chiron-a"
+    root = HOME / ".local/share/themes" / name
+    base = Path("/usr/share/themes") / GTK_THEME
+    files = {}
+    for ver, lay in (("gtk-3.0", layout), ("gtk-4.0", {"panels": []})):
+        imp = f'@import url("file://{base / ver / "gtk.css"}");\n' if (base / ver / "gtk.css").exists() else ""
+        files[root / ver / "gtk.css"] = imp + gtk_css(c, lay, solid)
+    files[root / "index.theme"] = ("[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Chiron\n"
+                                   "Comment=Clinic Night: adw-gtk3-dark coloured from the wallpaper (chiron-rice)\n"
+                                   f"Encoding=UTF-8\n\n[X-GNOME-Metatheme]\nGtkTheme={name}\n")
+    return name, files
+
+
+def apply(img, quiet=False):
+    img = Path(img).expanduser().resolve()
+    if not img.is_file() or img.suffix.lower() not in IMAGE_EXT:
+        raise SystemExit(f"chiron-rice: not an image: {img}")
+    (CACHE / "wallust-colors.json").unlink(missing_ok=True)
+    # Work out everything before changing anything: if wallust or any step here fails, the old theme
+    # stays whole instead of the desktop ending up half-themed.
+    palette = run_wallust(img)
+    c = derive(palette)
+    layout = load_layout()
+    solid = not compositing()
+    theme, files = gtk_theme_files(c, layout, solid)
+    files.update({
+        # Personal gtk.css would override the theme with stale colours until a restart, so keep it empty;
+        # GTK4/libadwaita apps don't use GTK themes, so they get the colours there (read when they start).
+        HOME / ".config/gtk-3.0/gtk.css": "/* Chiron colours live in ~/.local/share/themes/Chiron-a|b (chiron-rice) */\n",
+        HOME / ".config/gtk-4.0/gtk.css": gtk_css(c, {"panels": []}, solid),
+        HOME / ".config/rofi/chiron-colors.rasi": rofi_colors(c),
+        HOME / ".config/btop/themes/chiron.theme": btop_theme(c),
+        HOME / ".config/conky/chiron.conf": conky_conf(c, argb=not solid),
+        HOME / ".config/starship.toml": starship_toml(c),
+        HOME / ".config/fastfetch/config.jsonc": fastfetch_jsonc(c),
+    })
+    folders = papirus_color(c["accent"])
+    for path, text in files.items():
+        write_atomic(path, text)
+    xfconf("xfce4-terminal", "/color-use-theme", False, "bool")
+    xfconf("xfce4-terminal", "/color-foreground", rgb2hex(c["fg"]))
+    xfconf("xfce4-terminal", "/color-background", rgb2hex(c["bg"]))
+    xfconf("xfce4-terminal", "/color-cursor", rgb2hex(c["accent"]))
+    xfconf("xfce4-terminal", "/color-palette", ";".join(rgb2hex(t) for t in c["term"]))
+    papirus_overlay(folders)
+    # systemload graph bars in the accent colour (GdkRGBA is stored as 4 doubles in xfconf)
+    r, g, b = c["accent"]
+    for island in islands(layout):
+        for w in island["widgets"]:
+            if w.startswith("systemload-"):
+                for k in ("cpu/color", "memory/color", "network/color", "swap/color"):
+                    sh("xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-{w.split('-')[-1]}/{k}", "-n", "-a",
+                       "-t", "double", "-s", f"{r:.3f}", "-t", "double", "-s", f"{g:.3f}",
+                       "-t", "double", "-s", f"{b:.3f}", "-t", "double", "-s", "1.0")
+    set_wallpaper(img)
+    xfconf("xsettings", "/Net/ThemeName", theme)  # switching to the freshly written theme restyles everything
+    xfconf("xsettings", "/Net/IconThemeName", "Papirus-Dark")  # same trick for the folder colours; the pause
+    time.sleep(0.4)                                            # lets programs see two separate changes
+    xfconf("xsettings", "/Net/IconThemeName", ICON_THEME)
+    restart_conky()
+    state = load_state()
+    state["wallpaper"] = str(img)
+    state["solid"] = solid  # login() redoes the theme when the compositor setting changes
+    save_state(state)
+    if not quiet:
+        print(f"applied {img.name}: accent {rgb2hex(c['accent'])}, background {rgb2hex(c['bg'])}")
+
+
+def pick():
+    state = load_state()
+    pics = wallpapers(state.get("mode", "personal"))
+    new = build_thumbs(pics, quiet=True)
+    if new:
+        sh("notify-send", "Chiron", f"Made {new} new wallpaper thumbnails")
+    lines = "".join(f"{p.parent.name}/{p.name}\0icon\x1f{thumb_path(p)}\n" for p in pics)
+    # stderr is not captured: if rofi cannot open (e.g. it fails to grab the keyboard), its error
+    # reaches the terminal or ~/.xsession-errors instead of vanishing.
+    p = subprocess.run(["rofi", "-dmenu", "-i", "-show-icons", "-p", "wallpaper",
+                        "-theme", str(RICE / "rofi" / "picker.rasi")], input=lines, stdout=subprocess.PIPE, text=True)
+    choice = p.stdout.strip()
+    if choice:
+        for pic in pics:
+            if f"{pic.parent.name}/{pic.name}" == choice:
+                apply(pic)
+                return
+
+
+def cputemp():
+    """Hottest CPU sensor for conky (coretemp/k10temp), or nothing."""
+    best = None
+    for h in Path("/sys/class/hwmon").glob("hwmon*"):
+        try:
+            if (h / "name").read_text().strip() not in ("coretemp", "k10temp", "zenpower"):
+                continue
+            for t in h.glob("temp*_input"):
+                v = int(t.read_text()) / 1000
+                best = v if best is None else max(best, v)
+        except (OSError, ValueError):
+            continue
+    print(f"{best:.0f}°C" if best is not None else "")
+
+
+def timer(action):
+    sh("systemctl", "--user", action, "chiron-rice-rotate.timer")
+
+
+def set_pause(paused):
+    state = load_state()
+    if paused and not state.get("paused"):
+        state["compositing_before_pause"] = compositing()
+        timer("stop")
+        xfconf("xfwm4", "/general/use_compositing", False, "bool")
+    elif not paused and state.get("paused"):
+        xfconf("xfwm4", "/general/use_compositing", state.get("compositing_before_pause", True), "bool")
+        if state.get("mode", "personal") == "personal":  # rotation follows the mode, which may have changed meanwhile
+            timer("start")
+    state["paused"] = paused
+    save_state(state)
+    print("paused: rotation and compositor off" if paused else "resumed")
+
+
+def software_rendering():
+    rc, out = sh("glxinfo", "-B")
+    rc2, virt = sh("systemd-detect-virt")
+    return "llvmpipe" in out or "softpipe" in out or (rc2 == 0 and virt.strip() not in ("", "none"))
+
+
+# ---------------------------------------------------------------- one-time user setup
+
+def install_user():
+    layout = load_layout()
+    # Look and feel
+    for prop, val in (("/Net/ThemeName", GTK_THEME), ("/Net/IconThemeName", ICON_THEME),
+                      ("/Gtk/CursorThemeName", "Bibata-Modern-Classic"), ("/Gtk/FontName", "Noto Sans 10"),
+                      ("/Gtk/MonospaceFontName", "JetBrainsMono Nerd Font 10")):
+        xfconf("xsettings", prop, val)
+    xfconf("xfwm4", "/general/theme", "Default")
+    xfconf("xfwm4", "/general/show_frame_shadow", True, "bool")
+    xfconf("xfwm4", "/general/frame_opacity", 100, "int")
+    xfconf("xfce4-terminal", "/font-name", "JetBrainsMono Nerd Font 11")
+    xfconf("xfce4-terminal", "/misc-menubar-default", False, "bool")
+    xfconf("xfce4-desktop", "/desktop-icons/style", 0, "int")  # clean desktop, like the reference look
+    xfconf_array("xfwm4", "/general/workspace_names", ["1", "2", "3", "4"], "string")
+    # Keyboard shortcuts
+    me = str(RICE / "chiron-rice")
+    for key, cmd in (("<Super>w", f"{me} pick"), ("<Super><Shift>w", f"{me} random"),
+                     ("<Super>Return", "xfce4-terminal"), ("<Super>d", "rofi -show drun")):
+        xfconf("xfce4-keyboard-shortcuts", f"/commands/custom/{key}", cmd)
+    # Panels: rebuild from panel-layout.json
+    sh("xfce4-panel", "--quit")
+    sh("xfconf-query", "-c", "xfce4-panel", "-p", "/", "-R", "-r")
+    panel_root = HOME / ".config/xfce4/panel"
+    shutil.rmtree(panel_root, ignore_errors=True)
+    pid, panel_ids = 0, []
+    for n, panel in enumerate(layout["panels"], 1):
+        panel_ids.append(n)
+        ids = []
+        base = f"/panels/panel-{n}"
+        for k, v, kind in (("position", panel["position"], "string"), ("size", panel["size"], "uint"),
+                           ("length", panel["length"], "uint"), ("position-locked", True, "bool"),
+                           ("length-adjust", True, "bool"), ("icon-size", panel.get("icon_size", 0), "uint"),
+                           ("autohide-behavior", panel.get("autohide", 0), "uint"), ("background-style", 0, "uint"),
+                           ("nrows", 1, "uint"), ("mode", 0, "uint")):
+            xfconf("xfce4-panel", f"{base}/{k}", v, kind)
+        for item in panel["items"]:
+            for plugin in (["separator:expand"] if item == "expand" else item):
+                pid += 1
+                ids.append(pid)
+                kind, _, arg = plugin.partition(":")
+                pp = f"/plugins/plugin-{pid}"
+                xfconf("xfce4-panel", pp, kind)
+                if kind == "separator":
+                    xfconf("xfce4-panel", f"{pp}/expand", True, "bool")
+                    xfconf("xfce4-panel", f"{pp}/style", 0, "uint")
+                elif kind == "launcher":
+                    l = layout["launchers"][arg]
+                    d = panel_root / f"launcher-{pid}"
+                    d.mkdir(parents=True, exist_ok=True)
+                    (d / f"chiron-{arg}.desktop").write_text(
+                        "[Desktop Entry]\nVersion=1.0\nType=Application\n" +
+                        "".join(f"{k}={v.replace('{HOME}', str(HOME))}\n" for k, v in l.items()) +
+                        "Terminal=false\nStartupNotify=true\n")
+                    xfconf_array("xfce4-panel", f"{pp}/items", [f"chiron-{arg}.desktop"], "string")
+                elif kind == "pager":
+                    xfconf("xfce4-panel", f"{pp}/rows", 1, "uint")
+                    xfconf("xfce4-panel", f"{pp}/miniature-view", False, "bool")
+                elif kind == "clock":
+                    xfconf("xfce4-panel", f"{pp}/digital-layout", 3, "uint")
+                    xfconf("xfce4-panel", f"{pp}/digital-time-format", "%H:%M")
+                elif kind == "whiskermenu":
+                    xfconf("xfce4-panel", f"{pp}/button-icon", "view-app-grid-symbolic")
+                elif kind == "systemload":  # settings live in xfconf as /<monitor>/<setting> (systemload 1.3)
+                    for k, v, t in (("cpu/enabled", True, "bool"), ("cpu/use-label", True, "bool"), ("cpu/label", "cpu", "string"),
+                                    ("memory/enabled", True, "bool"), ("memory/use-label", True, "bool"), ("memory/label", "mem", "string"),
+                                    ("network/enabled", True, "bool"), ("network/use-label", True, "bool"), ("network/label", "net", "string"),
+                                    ("swap/enabled", False, "bool"), ("uptime/enabled", False, "bool")):
+                        xfconf("xfce4-panel", f"{pp}/{k}", v, t)
+                elif kind == "windowck-plugin":  # settings live in an rc file; show every window's title
+                    (panel_root / f"windowck-plugin-{pid}.rc").write_text(
+                        "only_maximized=false\nshow_on_desktop=false\nfull_name=true\ntwo_lines=false\nshow_tooltips=true\n"
+                        "size_mode=2\ntitle_size=60\nsync_wm_font=false\ntitle_font=Noto Sans 10\nsubtitle_font=Noto Sans 9\n"
+                        "title_alignment=5\ntitle_padding=6\ninactive_text_alpha=60\ninactive_text_shade=110\n")
+        xfconf_array("xfce4-panel", f"{base}/plugin-ids", ids, "int")
+    xfconf_array("xfce4-panel", "/panels", panel_ids, "int")
+    subprocess.Popen(["xfce4-panel"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    # Static configs (rofi, btop, wallust, bash)
+    for src, dst in ((RICE / "rofi" / "config.rasi", HOME / ".config/rofi/config.rasi"),
+                     (RICE / "wallust" / "wallust.toml", HOME / ".config/wallust/wallust.toml"),
+                     (RICE / "wallust" / "templates" / "colors.json", HOME / ".config/wallust/templates/colors.json")):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+    btop = HOME / ".config/btop/btop.conf"
+    btop.parent.mkdir(parents=True, exist_ok=True)
+    text = btop.read_text() if btop.exists() else ""
+    lines = [l for l in text.splitlines() if not l.startswith(("color_theme", "theme_background"))]
+    btop.write_text("\n".join(lines + ['color_theme = "chiron"', "theme_background = False"]) + "\n")
+    bashrc = HOME / ".bashrc"
+    block = ("\n# >>> chiron-rice >>>\n"
+             "command -v starship >/dev/null && eval \"$(starship init bash)\"\n"
+             "[ -n \"$PS1\" ] && command -v fastfetch >/dev/null && [ -z \"$CHIRON_NO_FETCH\" ] && fastfetch\n"
+             "# <<< chiron-rice <<<\n")
+    text = bashrc.read_text() if bashrc.exists() else ""
+    if "# >>> chiron-rice >>>" not in text:
+        bashrc.write_text(text + block)
+    # Autostart and rotation timer
+    auto = HOME / ".config/autostart"
+    auto.mkdir(parents=True, exist_ok=True)
+    (auto / "chiron-rice.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Chiron desktop theme\nExec=/opt/chiron/rice/chiron-rice login\n"
+        "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n")
+    units = HOME / ".config/systemd/user"
+    units.mkdir(parents=True, exist_ok=True)
+    (units / "chiron-rice-rotate.service").write_text(
+        "[Unit]\nDescription=Chiron Stick: next wallpaper\n\n[Service]\nType=oneshot\n"
+        "ExecStart=/opt/chiron/rice/chiron-rice next\n")
+    (units / "chiron-rice-rotate.timer").write_text(
+        "[Unit]\nDescription=Chiron Stick: change the wallpaper every 30 minutes\n\n[Timer]\n"
+        "OnActiveSec=30min\nOnUnitActiveSec=30min\n\n[Install]\nWantedBy=timers.target\n")
+    (units / "chiron-conky.service").write_text(  # started by login(), not enabled
+        "[Unit]\nDescription=Chiron Stick: system stats on the desktop (conky)\n\n[Service]\n"
+        f"ExecStart={shutil.which('conky') or '/usr/bin/conky'} -c %h/.config/conky/chiron.conf\n"
+        "Restart=on-failure\nRestartSec=3\n")
+    sh("systemctl", "--user", "daemon-reload")
+    sh("systemctl", "--user", "enable", "--now", "chiron-rice-rotate.timer")
+    state = load_state()
+    first = state.get("wallpaper")
+    if not first or not Path(first).exists():
+        pics = wallpapers(state.get("mode", "personal"))
+        first = random.choice(pics) if pics else None
+    if first:
+        apply(first)
+    login()  # after the first apply: that's what writes the conky config login() starts conky with
+    print("Desktop set up. Super+W picks a wallpaper; `chiron walls update` downloads the collection.")
+
+
+def restart_conky():
+    """conky runs as a user service: reloading it with a signal can make it abort on an X error, and a
+    conky started from the rotation timer would be stopped together with the timer's job."""
+    if shutil.which("conky") and (HOME / ".config/conky/chiron.conf").exists():
+        sh("systemctl", "--user", "reset-failed", "chiron-conky.service")
+        sh("systemctl", "--user", "restart", "chiron-conky.service")
+
+
+def login():
+    """Session start. A pause only lasts for a test, so one left over from a crash or reboot ends here.
+    No compositor on software rendering (VMs, missing GPU drivers): it would be slow. The theme is made
+    for one or the other (see-through panel and conky or not), so it's redone when that changed."""
+    sh("systemctl", "--user", "import-environment", "DISPLAY", "XAUTHORITY")  # for chiron-conky.service
+    state = load_state()
+    if state.get("paused"):
+        state["paused"] = False
+        save_state(state)
+    timer("start" if state.get("mode", "personal") == "personal" else "stop")
+    composite = not software_rendering()
+    xfconf("xfwm4", "/general/use_compositing", composite, "bool")
+    wall = state.get("wallpaper")
+    if wall and Path(wall).is_file() and state.get("solid") != (not composite):
+        apply(wall, quiet=True)  # restarts conky too
+    else:
+        restart_conky()
+
+
+# ---------------------------------------------------------------- command line
+
+def main(argv):
+    session_env()
+    cmd = argv[0] if argv else "status"
+    state = load_state()
+    if cmd == "apply" and len(argv) == 2:
+        apply(argv[1])
+    elif cmd == "pick":
+        pick()
+    elif cmd == "random":
+        apply(random.choice(wallpapers(state.get("mode", "personal"))))
+    elif cmd == "next":
+        if state.get("mode", "personal") == "personal" and not state.get("paused"):
+            apply(random.choice(wallpapers("personal")), quiet=True)
+    elif cmd == "mode" and len(argv) == 2 and argv[1] in ("client", "personal"):
+        state["mode"] = argv[1]
+        save_state(state)
+        timer("start" if argv[1] == "personal" and not state.get("paused") else "stop")
+        apply(random.choice(wallpapers(argv[1])))
+        print(f"mode: {argv[1]}" + (" (calm wallpapers, no rotation)" if argv[1] == "client" else ""))
+    elif cmd in ("pause", "resume"):
+        set_pause(cmd == "pause")
+    elif cmd == "login":
+        login()
+    elif cmd == "thumbs":
+        n = build_thumbs(wallpapers(state.get("mode", "personal")))
+        print(f"{n} new thumbnails")
+    elif cmd == "cputemp":
+        cputemp()
+    elif cmd == "install-user":
+        install_user()
+    elif cmd == "status":
+        print(json.dumps(state, indent=1))
+    else:
+        print(__doc__)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

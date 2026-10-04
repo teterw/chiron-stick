@@ -1,0 +1,19 @@
+/* Chiron Stick: app launcher (Super+D). Colours come from the wallpaper (chiron-colors.rasi). */
+configuration {
+    modi: "drun,run";
+    show-icons: true;
+    icon-theme: "Papirus-Chiron";
+    font: "Noto Sans 11";
+    drun-display-format: "{name}";
+}
+@import "chiron-colors.rasi"
+
+* { background-color: transparent; text-color: @fg; }
+window { background-color: @bg; border: 2px; border-color: @accent; border-radius: 8px; width: 560px; padding: 12px; }
+inputbar { children: [prompt, entry]; spacing: 8px; padding: 8px; background-color: @surface; border-radius: 6px; }
+prompt { text-color: @accent; }
+listview { lines: 8; columns: 1; spacing: 4px; margin: 10px 0 0 0; }
+element { padding: 6px 8px; border-radius: 6px; spacing: 10px; }
+element selected { background-color: @accent; text-color: @on-accent; }
+element-text { text-color: inherit; vertical-align: 0.5; }
+element-icon { size: 22px; }

@@ -1,0 +1,14 @@
+/* Chiron Stick: wallpaper picker (Super+W), a grid of thumbnails. */
+configuration { show-icons: true; }
+@import "~/.config/rofi/chiron-colors.rasi"
+
+* { background-color: transparent; text-color: @fg; font: "Noto Sans 10"; }
+window { background-color: @bg; border: 2px; border-color: @accent; border-radius: 8px; width: 80%; padding: 14px; }
+mainbox { children: [inputbar, listview]; }
+inputbar { children: [prompt, entry]; padding: 8px; background-color: @surface; border-radius: 6px; spacing: 8px; }
+prompt { text-color: @accent; }
+listview { columns: 4; lines: 3; spacing: 12px; margin: 12px 0 0 0; flow: horizontal; fixed-columns: true; }
+element { orientation: vertical; padding: 8px; border-radius: 8px; spacing: 6px; }
+element selected { background-color: @accent; text-color: @on-accent; }
+element-icon { size: 180px; }
+element-text { horizontal-align: 0.5; text-color: inherit; }

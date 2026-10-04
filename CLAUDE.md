@@ -324,6 +324,18 @@ Tete decides the aesthetics. Claude Code proposes options and implements them, a
 - Compositor: xfwm4's built-in one with light shadows only. No heavy blur by default. Auto-disable it when running on software rendering (llvmpipe) or in a VM.
 - Idle RAM target for the riced desktop: roughly under 1 GB. Measure and report it.
 
+**As built** (`setup/50-rice.sh` as root, then `setup/51-rice-user.sh` as the desktop user; the engine is `rice/chiron-rice`):
+- wallust only extracts the palette. `chiron-rice` derives every color itself and checks contrast: text ≥ 7:1, accent ≥ 3:1, terminal colors ≥ 4.5:1, background always dark. Near-grey wallpapers get Chiron teal (`#2ec4b6`). wallust's release binary has no published checksums, so it's built from crates.io (`cargo install wallust --version 3.5.1 --locked` with Ubuntu's `cargo-1.91`), and the Rust toolchain is purged afterwards.
+- GTK3 programs read `~/.config/gtk-3.0/gtk.css` only at startup, but re-read a *theme* when the theme name changes. So the colors live in a generated theme kept in two copies (`~/.local/share/themes/Chiron-a` and `-b`, each importing adw-gtk3-dark): write the unused copy, then switch to it. Everything is generated first and written only if all of it succeeded.
+- Folder colors: a per-user overlay icon theme, `Papirus-Chiron`, inherits `Papirus-Dark` and re-points the folder links (no `papirus-folders`, no root). It must not also inherit `Papirus`.
+- **Mint's Papirus ships without icon caches.** Without them every GTK program indexes ~500 icon folders on its own, about 55 MB of RAM each (1.8 GB idle → 0.9 GB once `gtk-update-icon-cache` has run). `setup/50-rice.sh` builds them, and the package's trigger keeps them current.
+- Panels are rebuilt from `rice/panel-layout.json`: a top bar of "islands" and an auto-hiding dock (a second xfce4-panel instead of Plank). Island CSS targets `#plugin-N > *` (plugin widgets don't paint their own background). systemload keeps its settings in xfconf (`/plugins/plugin-N/<monitor>/<setting>`); windowck reads an rc file and needs `only_maximized=false`.
+- rofi color names use `-` (`on-accent`); `_` is a parse error.
+- conky runs as `chiron-conky.service` (user unit, `Restart=on-failure`), restarted on each theme change. Reloading it with `SIGUSR1` can abort on an X error, and a conky started from the rotation timer's one-shot job would be stopped with the job.
+- Rotation every 30 minutes (systemd user timer). `login` (autostart) ends a pause left over from a crash, turns the compositor off on software rendering and redoes the theme if that changed since the last wallpaper. There are no personal widgets, so client mode only means calm wallpapers and no rotation.
+- Keys: `Super+W` pick, `Super+Shift+W` random, `Super+D` apps (rofi), `Super+Return` terminal. Cursor Bibata-Modern-Classic; UI font Noto Sans (Thai included), terminal JetBrainsMono Nerd Font. Login screen: a fixed branded image.
+- Measured in the 4 GiB build VM (software rendering, compositor off): `apply` 1.4–2.7 s; idle RAM 0.88 GB.
+
 **Done when:** `chiron rice apply` works on several very different wallpapers (dark, bright, low-color) with readable text every time · client/personal modes work · `chiron rice pause`/`resume` verified · desktop still boots and stays usable on software rendering in the VM · idle RAM measured · everything committed and pushed (section 5b) · snapshot `riced`.
 
 ### Phase 5 — The `chiron` tool (Tete + Claude Code)

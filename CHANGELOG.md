@@ -4,6 +4,26 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-04
+
+Phase 4R: the "Clinic Night" desktop theme. The whole desktop takes its colours from the wallpaper.
+
+### Added
+- `setup/50-rice.sh` (system part) and `setup/51-rice-user.sh` (per user); the engine is `rice/chiron-rice`
+  - `chiron rice apply <image>` re-themes GTK programs, the panels, terminal, rofi, notifications, btop, conky, starship, fastfetch and folder icons from the wallpaper in under 3 s. Contrast is checked, so any wallpaper gives readable text; grey wallpapers get Chiron teal. If anything fails, the previous theme stays.
+  - A top bar of "islands" and an auto-hiding dock (`rice/panel-layout.json`)
+  - Wallpaper picker with thumbnails (`Super+W`), random wallpaper (`Super+Shift+W`), app launcher (`Super+D`), terminal (`Super+Return`)
+  - `chiron rice mode personal` (whole collection, new wallpaper every 30 minutes) and `client` (calm wallpapers, no rotation)
+  - `chiron walls update` downloads the dharmx/walls collection without its animated wallpapers
+  - conky system-stats widget (a user service that restarts itself if it crashes), fastfetch with a Chiron logo, starship prompt
+  - Boot and login branding: GRUB theme, Plymouth splash, slick-greeter background
+  - Checksum-pinned downloads (adw-gtk3, fastfetch, starship, JetBrainsMono Nerd Font); wallust built from crates.io with `--locked`, then the Rust toolchain is removed
+  - Builds the icon caches Mint's Papirus lacks: idle RAM 1.8 GB → 0.9 GB
+- Tests for colour contrast on dark, bright and grey palettes, the panel layout, and "no half-applied theme"
+
+### Changed
+- `chiron stress` only resumes the desktop theme if it paused it, so a pause you set yourself stays
+
 ## [0.3.0] - 2026-10-04
 
 Phases 3, 4 and 6 done, and the `chiron` tool works in the build VM. The stick boots on fresh UEFI firmware (Secure Boot on, no boot entries) and on legacy BIOS; MemTest86 runs from its boot menu with Secure Boot on.

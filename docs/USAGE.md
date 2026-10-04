@@ -59,7 +59,23 @@ The commands ask for your password once (they need root to read the hardware). R
 
 Green, yellow and red always mean the same thing and never take on the desktop theme's colours.
 
-## 4. Leave without a trace
+## 4. The desktop
+
+The desktop takes its colours from the wallpaper: change the wallpaper and everything follows. **Super** is the Windows key.
+
+| Keys or command | What it does |
+|---|---|
+| `Super+W` | Pick a wallpaper: type to filter, Enter to apply, Esc to cancel |
+| `Super+Shift+W` | Random wallpaper |
+| `Super+D` | Find and start an app |
+| `Super+Return` | Terminal |
+| `chiron rice mode client` | On someone else's PC: calm wallpapers, no automatic changes |
+| `chiron rice mode personal` | The whole collection, a new wallpaper every 30 minutes |
+| `chiron walls update` | Download or update the wallpaper collection (about 3 GB) |
+
+The stress tests pause wallpaper changes and desktop effects by themselves (`chiron rice pause` and `chiron rice resume` do it by hand). On PCs without working graphics drivers, and in virtual machines, desktop effects stay off so the desktop stays quick.
+
+## 5. Leave without a trace
 
 1. Shut the stick down from the menu (don't just pull it out).
 2. Unplug it once the PC is off.

@@ -196,7 +196,7 @@ def stress(ctx, minutes=10, gpu=True, ram=True, progress=print):
                        f"not started: battery at {bcap}% (plug the charger in for the stress test)")]
     if bstatus == "Discharging":
         progress("  note: running on battery; plug the charger in for a fair test (stops below 25%)")
-    rice.pause()
+    paused = rice.pause()
     try:
         progress(f"  CPU: {minutes} min at full load (Ctrl-C stops it safely)")
         results = cpu_load(ctx, minutes, progress)
@@ -210,4 +210,5 @@ def stress(ctx, minutes=10, gpu=True, ram=True, progress=print):
             results.append(gpu_test(ctx))
         return results
     finally:
-        rice.resume()
+        if paused:
+            rice.resume()

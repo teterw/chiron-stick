@@ -1,0 +1,35 @@
+{
+ "_comment": "Chiron Stick panels (Clinic Night). Each inner list is one 'island' outlined in the wallpaper's accent colour; \"expand\" is a transparent spacer. Plugin ids are counted in this order, which chiron-rice relies on for the island CSS.",
+ "panels": [
+  {"name": "top", "position": "p=6;x=0;y=0", "size": 30, "length": 100, "icon_size": 16,
+   "items": [
+    ["whiskermenu"],
+    ["pager"],
+    ["launcher:terminal", "launcher:files", "launcher:browser", "launcher:settings"],
+    "expand",
+    ["windowck-plugin"],
+    "expand",
+    ["systemload"],
+    ["pulseaudio", "power-manager-plugin", "xapp-status-plugin", "systray"],
+    ["clock"],
+    ["notification-plugin"]
+   ]},
+  {"name": "dock", "position": "p=10;x=0;y=0", "size": 44, "length": 1, "icon_size": 26, "autohide": 1,
+   "items": [
+    ["launcher:terminal", "launcher:files", "launcher:browser", "launcher:editor", "launcher:monitor",
+     "launcher:report", "launcher:reports", "launcher:smart", "launcher:wallpaper", "launcher:settings"]
+   ]}
+ ],
+ "launchers": {
+  "terminal":  {"Name": "Terminal", "Exec": "xfce4-terminal", "Icon": "utilities-terminal-symbolic"},
+  "files":     {"Name": "Files", "Exec": "thunar", "Icon": "system-file-manager-symbolic"},
+  "browser":   {"Name": "Web Browser", "Exec": "firefox", "Icon": "web-browser-symbolic"},
+  "settings":  {"Name": "Settings", "Exec": "xfce4-settings-manager", "Icon": "preferences-system-symbolic"},
+  "editor":    {"Name": "Text Editor", "Exec": "xed", "Icon": "accessories-text-editor-symbolic"},
+  "monitor":   {"Name": "System Monitor", "Exec": "xfce4-terminal --title=btop -e btop", "Icon": "utilities-system-monitor-symbolic"},
+  "report":    {"Name": "Chiron health check", "Comment": "Run chiron report", "Exec": "xfce4-terminal --hold --title=Chiron -e \"chiron report\"", "Icon": "emblem-ok-symbolic"},
+  "reports":   {"Name": "Reports", "Comment": "Open ~/reports", "Exec": "thunar {HOME}/reports", "Icon": "folder-documents-symbolic"},
+  "smart":     {"Name": "GSmartControl", "Comment": "Drive health (SMART)", "Exec": "gsmartcontrol", "Icon": "drive-harddisk-symbolic"},
+  "wallpaper": {"Name": "Wallpaper", "Comment": "Pick a wallpaper (Super+W)", "Exec": "/opt/chiron/rice/chiron-rice pick", "Icon": "preferences-desktop-wallpaper-symbolic"}
+ }
+}

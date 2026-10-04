@@ -1,6 +1,7 @@
 """Hooks into the desktop theme ("rice", Phase 4R). Tests pause wallpaper rotation and the
 compositor so they run clean, and restore them afterwards (CLAUDE.md decision 10). Until the rice
 is installed these are no-ops, and `chiron rice …` says so."""
+import json
 from pathlib import Path
 
 from chiron.util import as_desktop_user, sh
@@ -21,8 +22,17 @@ def call(*args, timeout=60):
 
 
 def pause():
-    if available():
-        call("pause")
+    """Pause for a test. Returns True only if this call paused it, so a pause the person set
+    themselves is still there after the test."""
+    if not available():
+        return False
+    rc, out = call("status")
+    try:
+        if rc == 0 and json.loads(out).get("paused"):
+            return False
+    except ValueError:
+        pass
+    return call("pause")[0] == 0
 
 
 def resume():
