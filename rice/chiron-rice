@@ -15,14 +15,19 @@ The picker and the animated wallpaper changes are in chiron-walls.
   chiron-rice login                session start: end a leftover pause, compositor on or off, start conky
   chiron-rice status
   chiron-rice thumbs               build the wallpaper thumbnail cache
+  chiron-rice walls update         download or update the wallpaper collections (wallsources.conf)
+  chiron-rice walls review         keep or remove each picture; removed ones stay gone
+  chiron-rice walls status         what's downloaded, kept and removed
   chiron-rice install-user         one-time desktop setup for this user (panels, keys, fonts, autostart)
 """
 import colorsys
 import configparser
+import functools
 import hashlib
 import json
 import os
 import random
+import re
 import select
 import shutil
 import subprocess
@@ -181,7 +186,29 @@ def derive(palette):
             "surface2": surface2, "muted": muted, "term": term}
 
 
-# ---------------------------------------------------------------- wallpaper collection
+# ---------------------------------------------------------------- wallpaper collections
+
+SOURCES = RICE / "wallsources.conf"
+REVIEW = HOME / ".config" / "chiron" / "walls-review.json"
+
+
+def wallsources():
+    """The collections in review order: {name: {"git" or "list", "branch", "paths", "about"}}."""
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.read(SOURCES, encoding="utf-8")
+    return {name: dict(cfg[name]) for name in cfg.sections()}
+
+
+@functools.lru_cache(maxsize=None)
+def list_entries(listfile):
+    """A list collection's files: [(sha256, url, file, title, credit)]."""
+    out = []
+    for line in (RICE / listfile).read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            sha, url, name, title, credit = (line.split("\t") + [""] * 5)[:5]
+            out.append((sha, url, name, title, credit))
+    return out
+
 
 def wallsets():
     cfg = configparser.ConfigParser()
@@ -193,17 +220,215 @@ def wallsets():
     return sets
 
 
+def load_review():
+    """Choices from `chiron walls review`: paths relative to ~/Pictures/walls, kept or dropped."""
+    try:
+        d = json.loads(REVIEW.read_text())
+    except (OSError, ValueError):
+        d = {}
+    return {"keep": set(d.get("keep", [])), "drop": set(d.get("drop", []))}
+
+
+def save_review(review):
+    write_atomic(REVIEW, json.dumps({k: sorted(v) for k, v in review.items()}, indent=0) + "\n")
+
+
+def all_pictures():
+    """Every downloaded picture that wasn't removed in the review, in review order. Folders of your
+    own in ~/Pictures/walls count too, after the collections."""
+    if not WALLS.is_dir():
+        return []
+    drop = load_review()["drop"]
+    names = list(wallsources())
+    own = sorted(p.name for p in WALLS.iterdir() if p.is_dir() and not p.name.startswith(".") and p.name not in names)
+    out = []
+    for name in names + own:
+        found = []
+        for dirpath, dirs, files in os.walk(WALLS / name):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]  # skips .git
+            found += [Path(dirpath) / f for f in files if Path(f).suffix.lower() in IMAGE_EXT and not f.startswith(".")]
+        out += [p for p in sorted(found) if str(p.relative_to(WALLS)) not in drop]
+    return out
+
+
 def wallpapers(mode):
     s = wallsets()[mode]
+    inc, exc = set(s["include"]), set(s["exclude"])
     pics = []
-    if WALLS.is_dir():
-        for cat in sorted(p for p in WALLS.iterdir() if p.is_dir() and not p.name.startswith(".")):
-            if (s["include"] and cat.name not in s["include"]) or cat.name in s["exclude"]:
-                continue
-            pics += [p for p in sorted(cat.rglob("*")) if p.suffix.lower() in IMAGE_EXT]
+    for p in all_pictures():
+        parts = p.relative_to(WALLS).parts
+        keys = {parts[0], "/".join(parts[:2])}
+        if (inc and not keys & inc) or keys & exc:
+            continue
+        pics.append(p)
     if not pics:
         pics = [p for p in sorted(FALLBACK_WALLS.rglob("*")) if p.suffix.lower() in IMAGE_EXT]
     return pics
+
+
+def describe(img):
+    """(collection, folder, title, credit) to show with a picture."""
+    img = Path(img)
+    title = img.stem.replace("_", " ").replace("-", " ")
+    try:
+        parts = img.relative_to(WALLS).parts
+    except ValueError:
+        return img.parent.name, "", title, ""
+    src = wallsources().get(parts[0], {})
+    if "list" in src:
+        for _sha, _url, name, t, credit in list_entries(src["list"]):
+            if name == img.name:
+                return parts[0], "", t, credit
+    return parts[0], parts[-2] if len(parts) > 2 else "", title, ""
+
+
+def git(*args, cwd=None, stdin=None):
+    p = subprocess.run(["git", *args], cwd=cwd, input=stdin, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise SystemExit(f"chiron-rice: git {args[0]} failed: {(p.stderr or p.stdout).strip()[-300:]}")
+    return p.stdout
+
+
+def sparse_patterns(src, drops):
+    """The collection's folders, minus the pictures dropped in the review (gitignore syntax)."""
+    def esc(rel):
+        rel = "".join("\\" + ch if ch in "*?[\\" else ch for ch in rel)
+        return rel[:-1] + "\\ " if rel.endswith(" ") else rel
+    return "\n".join(src.get("paths", "/*").split() + [f"!/{esc(r)}" for r in sorted(drops)]) + "\n"
+
+
+def sync_git(name, src, drops):
+    """Partial clone + sparse checkout: only the collection's picture folders are downloaded, and
+    dropped pictures stay out of the checkout through every update."""
+    dest = WALLS / name
+    branch = src.get("branch", "main")
+    if not (dest / ".git").is_dir():
+        shutil.rmtree(dest, ignore_errors=True)
+        print(f"{name}: downloading {src['git']} …", flush=True)
+        git("clone", "--quiet", "--filter=blob:none", "--no-checkout", "--depth", "1", "--branch", branch, src["git"], str(dest))
+        git("sparse-checkout", "set", "--no-cone", "--stdin", cwd=dest, stdin=sparse_patterns(src, drops))
+        git("checkout", "--quiet", branch, cwd=dest)
+    else:
+        print(f"{name}: updating …", flush=True)
+        git("sparse-checkout", "set", "--no-cone", "--stdin", cwd=dest, stdin=sparse_patterns(src, drops))
+        git("fetch", "--quiet", "--depth", "1", "origin", branch, cwd=dest)
+        git("reset", "--quiet", "--hard", "FETCH_HEAD", cwd=dest)
+
+
+def sync_list(name, src, drops):
+    """Download the listed files, each checked against its SHA-256 (CLAUDE.md safety rule 7)."""
+    import urllib.request
+    dest = WALLS / name
+    dest.mkdir(parents=True, exist_ok=True)
+    entries = list_entries(src["list"])
+    wanted = {f for _sha, _url, f, _t, _c in entries if f not in drops}
+    fresh = 0
+    for sha, url, f, title, _credit in entries:
+        target = dest / f
+        if f not in wanted or (target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == sha):
+            continue
+        if not fresh:
+            print(f"{name}: downloading {len(wanted)} pictures …", flush=True)
+        fresh += 1
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "chiron-stick (chiron walls update)"})
+            data = urllib.request.urlopen(req, timeout=120).read()
+        except OSError as e:
+            print(f"{name}: {title}: download failed ({e}), skipped")
+            continue
+        if hashlib.sha256(data).hexdigest() != sha:
+            print(f"{name}: {title}: checksum mismatch, skipped")
+            continue
+        tmp = target.with_suffix(".part")
+        tmp.write_bytes(data)
+        tmp.replace(target)
+    for p in dest.iterdir():  # no longer listed, or removed in the review
+        if p.is_file() and p.name not in wanted:
+            p.unlink()
+
+
+def clean_caches(pics):
+    """Drop thumbnails and palettes of pictures that are gone."""
+    keep = {thumb_path(p).name for p in pics}
+    for t in (CACHE / "thumbs").glob("*.jpg"):
+        if t.name not in keep:
+            t.unlink(missing_ok=True)
+    keep = set()
+    for p in pics:
+        st = p.stat()
+        keep.add(hashlib.sha1(f"{p}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest() + ".json")
+    for f in (CACHE / "palettes").glob("*.json"):
+        if f.name not in keep:
+            f.unlink(missing_ok=True)
+
+
+def walls_update():
+    """`chiron walls update`: download or update every collection in wallsources.conf."""
+    WALLS.mkdir(parents=True, exist_ok=True)
+    if (WALLS / ".git").is_dir():  # before 0.6.0 one collection (dharmx/walls) lived right here
+        print("Removing the old wallpaper collection (dharmx/walls) …", flush=True)
+        for child in list(WALLS.iterdir()):
+            shutil.rmtree(child) if child.is_dir() and not child.is_symlink() else child.unlink()
+    review = load_review()
+    for name, src in wallsources().items():
+        drops = {r[len(name) + 1:] for r in review["drop"] if r.startswith(name + "/")}
+        try:
+            if "git" in src:
+                sync_git(name, src, drops)
+            elif "list" in src:
+                sync_list(name, src, drops)
+        except (SystemExit, OSError) as e:  # one collection failing doesn't stop the others
+            print(f"{name}: {e}")
+    pics = all_pictures()
+    print("Making thumbnails …", flush=True)
+    build_thumbs(pics, quiet=True)
+    clean_caches(pics)
+    state = load_state()
+    if not state.get("wallpaper") or not Path(state["wallpaper"]).is_file():
+        choice = wallpapers(state.get("mode", "personal"))
+        if choice:
+            apply(random.choice(choice))
+    walls_status()
+
+
+def apply_review():
+    """Take the pictures dropped in the review off the disk (from git collections through the sparse
+    checkout, so updates don't bring them back), and move off a dropped current wallpaper."""
+    review = load_review()
+    for name, src in wallsources().items():
+        dest = WALLS / name
+        drops = {r[len(name) + 1:] for r in review["drop"] if r.startswith(name + "/")}
+        if not dest.is_dir() or not drops:
+            continue
+        if "git" in src and (dest / ".git").is_dir():
+            git("sparse-checkout", "set", "--no-cone", "--stdin", cwd=dest, stdin=sparse_patterns(src, drops))
+        else:
+            for r in drops:
+                (dest / r).unlink(missing_ok=True)
+    state = load_state()
+    cur = state.get("wallpaper")
+    if cur and not Path(cur).is_file():
+        choice = wallpapers(state.get("mode", "personal"))
+        if choice:
+            apply(random.choice(choice), quiet=True, transition="random")
+
+
+def walls_status():
+    review = load_review()
+    pics = all_pictures()
+    total = 0
+    for name, src in list(wallsources().items()) + [("(your own)", {})]:
+        mine = [p for p in pics if p.relative_to(WALLS).parts[0] == name] if name != "(your own)" else \
+               [p for p in pics if p.relative_to(WALLS).parts[0] not in wallsources()]
+        if not mine and name == "(your own)":
+            continue
+        kept = sum(str(p.relative_to(WALLS)) in review["keep"] for p in mine)
+        dropped = sum(r.startswith(name + "/") for r in review["drop"])
+        print(f"  {name:12} {len(mine):4} pictures  {kept:4} kept  {dropped:4} removed  {src.get('about', '')}")
+        total += len(mine)
+    left = sum(str(p.relative_to(WALLS)) not in review["keep"] for p in pics)
+    size = sh("du", "-sh", "--exclude=.git", str(WALLS))[1].split("\t")[0] if WALLS.is_dir() else "0"
+    print(f"{total} wallpapers ({size}). " + (f"{left} not reviewed yet: chiron walls review" if left else "All reviewed."))
 
 
 def thumb_path(img):
@@ -249,8 +474,15 @@ def gtk_css(c, layout, solid_panel):
     deeper = ("systemload",)
     for island in islands(layout):
         sel = [f"#{w} > * > *" if w.rsplit("-", 1)[0] in deeper else f"#{w} > *" for w in island["widgets"]]
-        if island["panel"] == "dock":
-            out.append(f"{', '.join(sel)} {{ background-color: transparent; padding: 0 4px; }}")
+        if island["panel"] == "dock":  # a floating pill with rounded ends and a thin accent outline
+            edge = f"1px solid alpha({hx['accent']}, 0.55)"
+            out.append(f"{', '.join(sel)} {{ background-color: alpha({hx['bg']}, 0.94); border-radius: 0; "
+                       f"border-top: {edge}; border-bottom: {edge}; margin-top: 4px; margin-bottom: 4px; padding: 0 5px; }}")
+            out.append(f"{', '.join(s + ':hover' for s in sel)} {{ background-color: mix({hx['bg']}, {hx['accent']}, 0.3); }}")
+            out.append(f"{sel[0]} {{ border-left: {edge}; border-top-left-radius: 14px; border-bottom-left-radius: 14px; "
+                       f"margin-left: 10px; padding-left: 12px; }}")
+            out.append(f"{sel[-1]} {{ border-right: {edge}; border-top-right-radius: 14px; border-bottom-right-radius: 14px; "
+                       f"margin-right: 10px; padding-right: 12px; }}")
             continue
         out.append(f"{', '.join(sel)} {{ background-color: {hx['surface']}; border-radius: 0; margin-top: 3px; margin-bottom: 3px; padding: 0 3px; }}")
         first, last = sel[0], sel[-1]
@@ -258,8 +490,8 @@ def gtk_css(c, layout, solid_panel):
             first += ":first-child"
         if last.endswith("> * > *"):
             last += ":last-child"
-        out.append(f"{first} {{ border-left: 3px solid {hx['accent']}; border-top-left-radius: 4px; border-bottom-left-radius: 4px; margin-left: 6px; }}")
-        out.append(f"{last} {{ border-right: 3px solid {hx['accent']}; border-top-right-radius: 4px; border-bottom-right-radius: 4px; }}")
+        out.append(f"{first} {{ border-left: 3px solid {hx['accent']}; border-top-left-radius: 7px; border-bottom-left-radius: 7px; margin-left: 6px; }}")
+        out.append(f"{last} {{ border-right: 3px solid {hx['accent']}; border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}")
     out += ["", f"#XfceNotifyWindow {{ background-color: {hx['surface']}; color: {hx['fg']}; border: 2px solid {hx['accent']}; border-radius: 6px; }}",
             f"#XfceNotifyWindow label#summary {{ color: {hx['accent']}; font-weight: bold; }}"]
     return "\n".join(out) + "\n"
@@ -493,6 +725,54 @@ def gtk_theme_files(c, layout, solid):
     return name, files
 
 
+def dock_backdrop(img, layout, solid):
+    """The dock is a rounded pill floating on the wallpaper. Without a compositor nothing can be
+    see-through, so its corners would sit on a dark rectangle: then the dock's background becomes the
+    exact slice of wallpaper behind it (fake transparency, as panels did before compositors)."""
+    names = [p.get("name") for p in layout["panels"]]
+    if "dock" not in names:
+        return
+    n, size = names.index("dock") + 1, layout["panels"][names.index("dock")]["size"]
+    prop = f"/panels/panel-{n}"
+    if not solid:
+        xfconf("xfce4-panel", f"{prop}/background-style", 0, "uint")
+        return
+    geo, last = None, None
+    for _ in range(10):  # right after a theme switch the panel is still re-laying itself out
+        rc, out = sh("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel")
+        found = None
+        for wid in out.split() if rc == 0 else []:
+            g = dict(l.split("=", 1) for l in sh("xdotool", "getwindowgeometry", "--shell", wid)[1].split() if "=" in l)
+            x, w, h = int(g.get("X", -1)), int(g.get("WIDTH", 0)), int(g.get("HEIGHT", 0))
+            if x >= 0 and w > size and size <= h <= size + 2:  # the panel adds a 1 px border
+                found = (x, w, h)
+        if found and found == last:  # the same twice in a row: settled
+            geo = found
+            break
+        last = found
+        time.sleep(0.2)
+    rc, mons = sh("xrandr", "--listmonitors")
+    mon = None
+    for m in re.finditer(r"(\d+)/\d+x(\d+)/\d+\+(\d+)\+(\d+)", mons if rc == 0 else ""):
+        mw, mh, mx, my = map(int, m.groups())
+        if geo and mx <= geo[0] < mx + mw:
+            mon = (mw, mh, mx)
+    if not geo or not mon:
+        return
+    from PIL import Image, ImageOps
+    mw, mh, mx = mon
+    with Image.open(img) as im:
+        im.draft("RGB", (mw, mh))
+        full = ImageOps.fit(im.convert("RGB"), (mw, mh), Image.BILINEAR)  # as xfdesktop's "zoomed" shows it
+    x0 = geo[0] - mx
+    current = xfconf_get("xfce4-panel", f"{prop}/background-image") or ""
+    path = CACHE / ("dock-b.png" if current.endswith("dock-a.png") else "dock-a.png")  # a new name: the panel reloads it
+    path.parent.mkdir(parents=True, exist_ok=True)
+    full.crop((x0, mh - geo[2], x0 + geo[1], mh)).save(path)
+    xfconf("xfce4-panel", f"{prop}/background-image", str(path))
+    xfconf("xfce4-panel", f"{prop}/background-style", 2, "uint")
+
+
 def apply(img, quiet=False, transition=None):
     """transition: animate the change behind the windows (chiron-walls effect name, or "random")."""
     img = Path(img).expanduser().resolve()
@@ -542,6 +822,7 @@ def apply(img, quiet=False, transition=None):
     xfconf("xsettings", "/Net/IconThemeName", "Papirus-Dark")  # same trick for the folder colours; the pause
     time.sleep(0.4)                                            # lets programs see two separate changes
     xfconf("xsettings", "/Net/IconThemeName", ICON_THEME)
+    dock_backdrop(img, layout, solid)  # after the theme switch: the dock's size depends on it
     restart_conky()
     state = load_state()
     state["wallpaper"] = str(img)
@@ -652,6 +933,20 @@ def software_rendering():
 
 # ---------------------------------------------------------------- one-time user setup
 
+def install_launchers():
+    """The picker and the review in the app menu (Super+D), so neither needs a terminal."""
+    apps = HOME / ".local/share/applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    for name, title, comment, args, icon in (
+            ("chiron-wallpapers", "Wallpapers", "Pick a wallpaper; the desktop takes its colours", "pick",
+             "preferences-desktop-wallpaper"),
+            ("chiron-wallpaper-review", "Review wallpapers", "Keep or remove each downloaded wallpaper", "walls review",
+             "view-preview")):
+        (apps / f"{name}.desktop").write_text(
+            f"[Desktop Entry]\nType=Application\nName={title}\nComment={comment}\n"
+            f"Exec={RICE / 'chiron-rice'} {args}\nIcon={icon}\nCategories=Settings;DesktopSettings;\nTerminal=false\n")
+
+
 def install_user():
     layout = load_layout()
     # Look and feel
@@ -747,6 +1042,7 @@ def install_user():
     text = bashrc.read_text() if bashrc.exists() else ""
     if "# >>> chiron-rice >>>" not in text:
         bashrc.write_text(text + block)
+    install_launchers()
     # Autostart and rotation timer
     auto = HOME / ".config/autostart"
     auto.mkdir(parents=True, exist_ok=True)
@@ -802,6 +1098,9 @@ def login():
     if wall and Path(wall).is_file() and state.get("solid") != (not composite):
         apply(wall, quiet=True)  # restarts conky too
     else:
+        if wall and Path(wall).is_file():  # this PC's screen may not be the last one's size
+            time.sleep(1.5)  # let the panels come up first
+            dock_backdrop(wall, load_layout(), not composite)
         restart_conky()
 
 
@@ -839,6 +1138,13 @@ def main(argv):
         print(f"{n} new thumbnails")
     elif cmd == "cputemp":
         cputemp()
+    elif cmd == "walls" and len(argv) == 2 and argv[1] in ("update", "review", "status"):
+        if argv[1] == "update":
+            walls_update()
+        elif argv[1] == "review":
+            return subprocess.call([str(RICE / "chiron-walls"), "review"])
+        else:
+            walls_status()
     elif cmd == "install-user":
         install_user()
     elif cmd == "status":

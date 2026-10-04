@@ -14,7 +14,7 @@ from chiron.checks import run_all
 from chiron.checks.system import identity
 from chiron.model import Context
 from chiron.report import write_all
-from chiron.util import as_desktop_user, desktop_user, is_root, own_disks, sh
+from chiron.util import desktop_user, is_root, own_disks
 
 HELP = """Chiron Stick: a portable PC doctor.
 
@@ -26,7 +26,9 @@ HELP = """Chiron Stick: a portable PC doctor.
   chiron umount <mountpoint|all>      undo mount-ro
   chiron forget <machine>             delete every report and the history of one machine
   chiron rice <apply|pick|random|mode|pause|resume> …   desktop theme
-  chiron walls update                 download or update the wallpaper collection
+  chiron walls update                 download or update the wallpaper collections
+  chiron walls review                 see every wallpaper and keep it or remove it
+  chiron walls status                 what's downloaded, kept and removed
   chiron help                         this list
 
 Reports go to ~/reports/<date>_<maker>-<model>/ (report.md/.html/.json, owner-summary.html, raw/)."""
@@ -175,13 +177,7 @@ def cmd_rice(args):
 
 
 def cmd_walls(args):
-    script = rice.RICE / "get-walls.sh"
-    if not script.exists():
-        print("The wallpaper collection comes with the desktop theme (Phase 4R), which isn't installed yet.")
-        return 1
-    rc, out, err = sh(as_desktop_user([str(script)]), timeout=3600)
-    print((out + err).strip())
-    return rc
+    return rice.run("walls", args.action)
 
 
 def main(argv=None):
@@ -201,7 +197,7 @@ def main(argv=None):
     u = sub.add_parser("umount"); u.add_argument("target")
     f = sub.add_parser("forget"); f.add_argument("machine")
     ri = sub.add_parser("rice"); ri.add_argument("args", nargs=argparse.REMAINDER)
-    w = sub.add_parser("walls"); w.add_argument("action", choices=["update"])
+    w = sub.add_parser("walls"); w.add_argument("action", choices=["update", "review", "status"])
     sub.add_parser("help")
     args = p.parse_args(argv)
 

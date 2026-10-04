@@ -4,6 +4,30 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-04
+
+New wallpapers, picked by Tete: the first collection had many AI-captioned and AI-looking pictures.
+
+### Added
+- Wallpaper collections in `rice/wallsources.conf`, downloaded by `chiron walls update` into `~/Pictures/walls/<name>/`:
+  - **Real space images**: 57 of ESA/Webb's and ESA/Hubble's top-rated pictures (wallpaper versions, CC BY 4.0), each pinned to its SHA-256 in `rice/space-walls.txt` with its title and credit
+  - **Real photos**: elementary OS and Pop!_OS wallpapers
+  - **Violet themes**: Rosé Pine (CC0) and Dracula (MIT)
+  - **Aesthetic art**: D3Ext/aesthetic-wallpapers (MIT)
+  - git collections are partial clones with a sparse checkout of their picture folders only
+- `chiron walls review`: every new wallpaper one at a time, shown whole with its credit, with **Keep** and **Remove** buttons (→/Y, ←/N), Undo and Stop. Choices are saved as you go, and removed pictures stay gone after updates. A held key or a double-click counts once
+- `chiron walls status`; *Wallpapers* and *Review wallpapers* in the app menu
+- Folders of your own in `~/Pictures/walls/` join the collection
+- Tests for the collections, the review exclusions and the space list
+
+### Changed
+- The dock is a floating pill with rounded ends and a thin accent outline, and the top bar's islands are rounder. Without a compositor (VMs, PCs without graphics drivers) the dock's background is the slice of wallpaper behind it, so the rounded corners still show
+- Client mode uses space, elementary, Pop!_OS and Rosé Pine photography
+- The picker shows each picture's collection and title (space images by name)
+
+### Removed
+- The dharmx/walls collection (3 GB) and `rice/get-walls.sh`; `chiron walls update` removes the old download
+
 ## [0.5.0] - 2026-10-04
 
 A new look picked by Tete: the constellation logo in Chiron violet, and a wallpaper switcher in the style of Arch Linux rices.

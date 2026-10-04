@@ -100,7 +100,7 @@ fi
 echo "===== 4. Theme scripts -> /opt/chiron/rice"
 rm -rf /opt/chiron/rice.new
 cp -r "$REPO/rice" /opt/chiron/rice.new
-chmod 0755 /opt/chiron/rice.new/chiron-rice /opt/chiron/rice.new/get-walls.sh /opt/chiron/rice.new/branding/make-assets.py
+chmod 0755 /opt/chiron/rice.new/chiron-rice /opt/chiron/rice.new/chiron-walls /opt/chiron/rice.new/branding/make-assets.py
 rm -rf /opt/chiron/rice
 mv /opt/chiron/rice.new /opt/chiron/rice
 

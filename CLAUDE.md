@@ -60,7 +60,7 @@ Plug it into a consenting owner's PC or laptop → boot from USB → run a hardw
 | Distro | **Linux Mint 22.3 "Zena" Xfce** (Ubuntu 24.04 base, Ubiquity installer, supported to 2029) |
 | Future | Mint 23 (Ubuntu 26.04 base, new installer) is expected around Dec 2026 → upgrade or reinstall later |
 | Timezone | Asia/Bangkok (UTC+7) |
-| Wallpapers | https://github.com/dharmx/walls: ~1,700 files in ~55 category folders (mostly jpg/png, plus 11 `.mp4` in `animated/`). Total size not measured yet: measure after cloning. The repo owner notes the images were collected from many sites and credits belong to the original artists: personal use only, don't redistribute. |
+| Wallpapers | Collections in `rice/wallsources.conf` (since 0.6.0): ESA/Webb + ESA/Hubble space images (CC BY 4.0, pinned list), elementary OS and Pop!_OS photos, Rosé Pine (CC0) and Dracula (MIT) art, D3Ext/aesthetic-wallpapers (MIT). Personal use: downloaded on the stick, never redistributed. The first set, dharmx/walls, was dropped: many AI-captioned and AI-looking pictures. |
 | Theming engine | **wallust** (pywal successor: 16-color palette from an image, template system, `check_contrast` option). Not in apt: install a release binary (verify checksum) or build with cargo. |
 
 ### Claude Code must check these itself (don't assume)
@@ -158,7 +158,7 @@ This project is public so others can build their own Chiron Stick. **Rule: if it
   | `docs/USAGE.md` | How to boot it and run `chiron` |
   | `setup/` | One idempotent script per phase (`10-base-config.sh`, `20-toolkit.sh`, …) with a `--dry-run` flag |
   | `chiron/` | The `chiron` tool (every user command) |
-  | `rice/` | wallust config and templates, rice scripts (run through `chiron rice …`), configs. Wallpapers are **downloaded by `chiron walls update`, never committed** |
+  | `rice/` | the theme engine and picker, configs, the wallpaper collection list. Wallpapers are **downloaded by `chiron walls update`, never committed** |
   | `CHANGELOG.md`, `LICENSE`, `.gitignore` | |
 
 - Personal details (this laptop, drive serial/by-id path, username, hostname) stay out of the public repo. They live in `CLAUDE.local.md` (gitignored; Claude Code loads it automatically next to `CLAUDE.md`). `PROGRESS.md` is gitignored too; the public history lives in `CHANGELOG.md`.
@@ -288,9 +288,10 @@ Disable the `smartd` service (`smartmontools` starts it): `chiron` reads SMART o
 Tete decides the aesthetics. Claude Code proposes options and implements them, and asks before big visual choices. Everything goes into `rice/` in the repo.
 
 **Wallpapers**
-- `chiron walls update` (script `rice/get-walls.sh`): `git clone --depth 1 https://github.com/dharmx/walls ~/Pictures/walls` (or `git pull` if present). Report the size with `du -sh` after the first clone.
-- Exclude `animated/` (the `.mp4` files) from rotation. Xfce has no native video wallpapers, and video playback would keep the GPU busy and skew test results.
-- `rice/wallsets.conf` defines named sets. **personal** = all categories (minus any Tete excludes). **client** = calm, neutral categories only (e.g. `nature`, `mountain`, `minimal`, `calm`, `aerial`, `fogsmoke`, `paper`) for use on other people's PCs.
+- `chiron walls update` downloads the collections in `rice/wallsources.conf` into `~/Pictures/walls/<name>/`. Since 0.6.0 (Tete, 2026-10-04: the first set, dharmx/walls, was full of AI-captioned and AI-looking pictures, so it's gone): **real space images** from ESA/Webb and ESA/Hubble (Tete likes these; a pinned list, `rice/space-walls.txt`, each file checked against its SHA-256), **real photos** from elementary OS and Pop!_OS, **violet themes** from Rosé Pine and Dracula, and **aesthetic art** from D3Ext/aesthetic-wallpapers. git collections use a partial clone with a sparse checkout of their picture folders only.
+- `chiron walls review`: every picture one at a time, full size, with **Keep / Remove** buttons (keys, undo, resumable). Removed pictures leave the disk and stay out after updates (sparse-checkout exclusions; list files skipped).
+- Only still pictures (jpg, png, webp). No videos: Xfce has no native video wallpapers, and playback would keep the GPU busy and skew test results.
+- `rice/wallsets.conf` defines named sets by collection (or collection/folder). **personal** = everything kept. **client** = calm, neutral pictures for other people's PCs (space, elementary, Pop!_OS, Rosé Pine photography).
 
 **Dynamic theme engine: one command, `chiron rice apply <image>`**
 1. Set the wallpaper on every monitor and workspace (Xfce backdrop properties via `xfconf-query`; detect the monitor names, don't hard-code them).
@@ -333,6 +334,8 @@ Tete decides the aesthetics. Claude Code proposes options and implements them, a
 - **Mint's Papirus ships without icon caches.** Without them every GTK program indexes ~500 icon folders on its own, about 55 MB of RAM each (1.8 GB idle → 0.9 GB once `gtk-update-icon-cache` has run). `setup/50-rice.sh` builds them, and the package's trigger keeps them current.
 - Panels are rebuilt from `rice/panel-layout.json`: a top bar of "islands" and an auto-hiding dock (a second xfce4-panel instead of Plank). Island CSS targets `#plugin-N > *` (plugin widgets don't paint their own background). systemload keeps its settings in xfconf (`/plugins/plugin-N/<monitor>/<setting>`); windowck reads an rc file and needs `only_maximized=false`.
 - rofi color names use `-` (`on-accent`); `_` is a parse error.
+- The dock is a rounded floating pill drawn on its launchers (like the top bar's islands) on a see-through panel. X11 without a compositor can't show see-through windows, so then `dock_backdrop()` sets the dock's xfce4-panel background (`background-style` 2) to the exact slice of the zoomed wallpaper behind it, refreshed on every wallpaper change and at login (fake transparency). The panel window is 1 px taller than its size and needs a moment to settle after a theme switch.
+- Wallpaper review (`chiron walls review`, `chiron-walls review`): one picture at a time, whole, with Keep / Remove (→/Y, ←/N), Undo and Stop; each choice is saved at once in `~/.config/chiron/walls-review.json`, removals happen when the review ends. **Key auto-repeat must never decide anything**: on the busy build VM a late key release made the X server repeat ← by itself and remove 13 pictures in a test. The review ignores repeats of a key that's still down and keeps choices 0.2 s apart (the picker keeps auto-repeat for fast browsing). Also in the app menu (*Wallpapers*, *Review wallpapers*).
 - conky runs as `chiron-conky.service` (user unit, `Restart=on-failure`), restarted on each theme change without waiting (`--no-block`: a blocking restart took 1.4 s of every change). Reloading it with `SIGUSR1` can abort on an X error, and a conky started from the rotation timer's one-shot job would be stopped with the job.
 - Boot menu: legacy BIOS often runs GRUB at 640×480, so the menu is 70% wide with 18 px text (the longest entry is ~380 px); the console GRUB shows while loading the kernel gets a thin violet edge (GRUB ignores the theme's `terminal-left/top/width/height` here: it centres an 80×24 console and keeps it black, still smaller than its default 70% box). `GRUB_RECORDFAIL_TIMEOUT=5`: after an unfinished boot (often, on a stick unplugged at the unlock prompt) Ubuntu would wait 30 s. A throwaway GRUB rescue ISO in QEMU previews the theme without touching the stick. Plymouth: Mint's frames are deleted before ours are copied in (a leftover frame would flash Mint's logo). The login screen uses `Chiron-greeter` (adw-gtk3-dark with the violet accent).
 - Rotation every 30 minutes (systemd user timer). `login` (autostart) ends a pause left over from a crash, turns the compositor off on software rendering and redoes the theme if that changed since the last wallpaper. There are no personal widgets, so client mode only means calm wallpapers and no rotation.
@@ -351,7 +354,7 @@ Develop in a git repo in this folder (`./chiron/`). Deploy to `/opt/chiron` on t
 - `chiron mount-ro <device>`: read-only mount helper (NTFS via ntfs3/ntfs-3g `ro`; BitLocker via `cryptsetup open --type bitlk --readonly` with a recovery key the owner types, `dislocker -r` as fallback). Refuses read-write.
 - `chiron compare`: compare this machine with its previous report (also shown automatically when a previous report exists)
 - `chiron forget <machine>`: delete all stored reports and history for one machine (when the owner asks)
-- `chiron rice …` and `chiron walls update`: the desktop commands from Phase 4R
+- `chiron rice …` and `chiron walls update|review|status`: the desktop commands from Phase 4R
 - `chiron help`: list every command (the README has the same table)
 
 **Output:** `~/reports/YYYY-MM-DD_HHMM_<vendor>-<model>/` containing `report.md`, `report.html`, `report.json`, `owner-summary.html` and `raw/` (raw tool outputs). Never copy the owner's personal files.

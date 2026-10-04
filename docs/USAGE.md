@@ -71,7 +71,8 @@ The desktop takes its colours from the wallpaper: change the wallpaper and every
 | `Super+Return` | Terminal |
 | `chiron rice mode client` | On someone else's PC: calm wallpapers, no automatic changes |
 | `chiron rice mode personal` | The whole collection, a new wallpaper every 30 minutes |
-| `chiron walls update` | Download or update the wallpaper collection (about 3 GB) |
+| `chiron walls update` | Download or update the wallpaper collections (about 1.3 GB) |
+| `chiron walls review` | Every new wallpaper, one at a time: → or Y keeps it, ← or N removes it, Backspace undoes, Esc stops (it carries on next time). Also in the app menu as *Review wallpapers* |
 
 The stress tests pause wallpaper changes and desktop effects by themselves (`chiron rice pause` and `chiron rice resume` do it by hand). On PCs without working graphics drivers, and in virtual machines, desktop effects stay off so the desktop stays quick. `chiron rice animations off` turns off the animated wallpaper changes too.
 

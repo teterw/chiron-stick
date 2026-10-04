@@ -2,11 +2,13 @@
 compositor so they run clean, and restore them afterwards (CLAUDE.md decision 10). Until the rice
 is installed these are no-ops, and `chiron rice …` says so."""
 import json
+import subprocess
 from pathlib import Path
 
 from chiron.util import as_desktop_user, sh
 
 RICE = Path("/opt/chiron/rice")
+MISSING = "The desktop theme (Phase 4R) isn't installed on this stick yet."
 
 
 def available():
@@ -16,9 +18,17 @@ def available():
 def call(*args, timeout=60):
     """Run the rice tool as the desktop user. Returns (rc, output)."""
     if not available():
-        return 127, "The desktop theme (Phase 4R) isn't installed on this stick yet."
+        return 127, MISSING
     rc, out, err = sh(as_desktop_user([str(RICE / "chiron-rice"), *args]), timeout=timeout)
     return rc, (out + err).strip()
+
+
+def run(*args):
+    """Like call(), for long or interactive jobs: the output goes straight to the terminal."""
+    if not available():
+        print(MISSING)
+        return 127
+    return subprocess.call(as_desktop_user([str(RICE / "chiron-rice"), *args]))
 
 
 def pause():

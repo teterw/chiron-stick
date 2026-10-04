@@ -22,7 +22,8 @@ Everything Chiron Stick adds is one command, `chiron`.
 | `chiron rice pick` / `chiron rice random` | Choose a wallpaper (also `Super+W` / `Super+Shift+W`) |
 | `chiron rice mode client\|personal` | Calm wallpapers on other people's PCs, or the full set for personal use |
 | `chiron rice pause` / `chiron rice resume` | Pause wallpaper rotation and desktop effects (stress tests do this automatically) |
-| `chiron walls update` | Download or update the wallpaper collection |
+| `chiron walls update` | Download or update the wallpaper collections |
+| `chiron walls review` | See every wallpaper and keep it or remove it |
 | `chiron help` | List every command |
 
 ## What it checks
@@ -40,7 +41,7 @@ Each run produces a technical report (Markdown, HTML, JSON) and a one-page **own
 
 ## The desktop
 
-"Clinic Night" is a dark Xfce desktop that takes its colors from the wallpaper. `Super+W` opens a full-screen picker: browse the wallpapers and see a live preview of the whole desktop in each one's colors, then press Enter and the preview grows into your new desktop. The panel, windows, terminal, app launcher, notifications and folder icons all follow. Other wallpaper changes slide in behind your windows with animated transitions (grow, wipe, wave or fade). Every color is contrast-checked, so text stays readable on any wallpaper. The reports' green, yellow and red never change with it. The desktop idles at about 0.9 GB of RAM, and turns its effects off on PCs without working graphics drivers. Wallpapers come from [dharmx/walls](https://github.com/dharmx/walls) (`chiron walls update`).
+"Clinic Night" is a dark Xfce desktop that takes its colors from the wallpaper. `Super+W` opens a full-screen picker: browse the wallpapers and see a live preview of the whole desktop in each one's colors, then press Enter and the preview grows into your new desktop. The top bar, the floating dock, windows, terminal, app launcher, notifications and folder icons all follow. Other wallpaper changes slide in behind your windows with animated transitions (grow, wipe, wave or fade). Every color is contrast-checked, so text stays readable on any wallpaper. The reports' green, yellow and red never change with it. The desktop idles at about 0.9 GB of RAM, and turns its effects off on PCs without working graphics drivers. `chiron walls update` downloads the wallpapers: real space images from ESA's Webb and Hubble telescopes, real photos from [elementary OS](https://github.com/elementary/wallpapers) and [Pop!_OS](https://github.com/pop-os/wallpapers), [Rosé Pine](https://github.com/rose-pine/wallpapers) and [Dracula](https://github.com/dracula/wallpaper) art, and [D3Ext's aesthetic collection](https://github.com/D3Ext/aesthetic-wallpapers). `chiron walls review` shows each one with Keep and Remove buttons, and removed ones stay gone.
 
 The logo is a constellation: six stars forming a C, with Sagittarius' arrow flying out of it (in the myth, Chiron became that constellation). It's on the boot menu, boot splash and login screen, in Chiron violet.
 
@@ -80,7 +81,7 @@ On the stick (in the VM, as root, from a copy of this repo):
 7. `setup/30-chiron.sh`: the `chiron` command
 8. `setup/40-memtest86.sh`: MemTest86 in the boot menu (downloaded and signature-checked; never redistributed)
 9. `setup/50-rice.sh`: the desktop theme's system part (packages, checksum-verified downloads, boot and login screens)
-10. `setup/51-rice-user.sh`, as the desktop user inside the desktop session: panels, keys and theme. Then `chiron walls update` downloads the wallpapers (about 3 GB).
+10. `setup/51-rice-user.sh`, as the desktop user inside the desktop session: panels, keys and theme. Then `chiron walls update` downloads the wallpapers (about 1.3 GB) and `chiron walls review` lets you keep or remove each one.
 
 Back on the host: `setup/12-boot-tests.sh` boots the stick in fresh UEFI (Secure Boot) and legacy-BIOS test VMs.
 
@@ -90,4 +91,4 @@ Find your drive's serial with `lsblk -o NAME,SIZE,MODEL,SERIAL,TRAN`. How to use
 
 ## License
 
-MIT. Wallpapers aren't included: `chiron walls update` downloads them from their source, and credit belongs to the original artists.
+MIT. Wallpapers aren't included: `chiron walls update` downloads them from their sources, and credit belongs to the original artists (the space images are © ESA/Webb and ESA/Hubble, CC BY 4.0; the review screen shows each one's credit).

@@ -101,5 +101,40 @@ class Palette(unittest.TestCase):
             self.assertIn("--print-scheme", args)
 
 
+class Collections(unittest.TestCase):
+    def test_sets_and_review(self):
+        """Collections in wallsources.conf order, then folders of your own; still pictures only;
+        .git skipped; pictures removed in the review never show; client mode keeps to calm ones."""
+        with tempfile.TemporaryDirectory() as tmp:
+            walls = Path(tmp) / "walls"
+            for rel in ("mine/f.webp", "d3ext/images/e.gif", "d3ext/.git/objects/x.jpg", "rose-pine/anime/d.png",
+                        "rose-pine/photography/c.png", "elementary/backgrounds/b.jpg", "space/a.jpg"):
+                (walls / rel).parent.mkdir(parents=True, exist_ok=True)
+                (walls / rel).write_bytes(b"x")
+            with mock.patch.multiple(rice, WALLS=walls, REVIEW=Path(tmp) / "review.json"):
+                rice.save_review({"keep": set(), "drop": {"rose-pine/anime/d.png"}})
+                personal = [str(p.relative_to(walls)) for p in rice.wallpapers("personal")]
+                client = [str(p.relative_to(walls)) for p in rice.wallpapers("client")]
+        self.assertEqual(personal, ["space/a.jpg", "elementary/backgrounds/b.jpg", "rose-pine/photography/c.png", "mine/f.webp"])
+        self.assertEqual(client, ["space/a.jpg", "elementary/backgrounds/b.jpg", "rose-pine/photography/c.png"])
+
+    def test_removed_pictures_stay_out_of_the_checkout(self):
+        pats = rice.sparse_patterns({"paths": "/*/ !/.github/"}, {"x/[1] y.jpg", "anime/a*b.png"}).splitlines()
+        self.assertEqual(pats, ["/*/", "!/.github/", "!/anime/a\\*b.png", "!/x/\\[1] y.jpg"])
+
+    def test_space_list(self):
+        """Every space picture is pinned to a SHA-256, comes over https and carries its credit."""
+        entries = rice.list_entries(rice.wallsources()["space"]["list"])
+        self.assertGreater(len(entries), 20)
+        self.assertEqual(len({f for _s, _u, f, _t, _c in entries}), len(entries), "file names are unique")
+        for sha, url, name, title, credit in entries:
+            self.assertRegex(sha, r"^[0-9a-f]{64}$")
+            self.assertTrue(url.startswith("https://"), url)
+            self.assertTrue(name.endswith(".jpg") and title and credit, name)
+        sha, url, name, title, credit = entries[0]
+        with mock.patch.object(rice, "WALLS", Path("/w")):
+            self.assertEqual(rice.describe(Path("/w/space") / name), ("space", "", title, credit))
+
+
 if __name__ == "__main__":
     unittest.main()

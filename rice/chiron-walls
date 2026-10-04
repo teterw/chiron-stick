@@ -4,6 +4,7 @@ Stick desktop theme. Runs as the desktop user; the theme itself comes from chiro
 
   chiron-walls pick                     full-screen picker: browse with a live preview of the theme
                                         on the wallpaper, Enter applies it, Esc goes back
+  chiron-walls review                   every picture not yet reviewed, one at a time: Keep or Remove
   chiron-walls transition OLD NEW [FX]  animate the desktop from OLD to NEW behind the windows
                                         (FX: grow, wipe, wave, fade or random); prints "ready" once
                                         the old wallpaper covers the desktop
@@ -103,6 +104,8 @@ def cover(path, w, h):
 
 def thumb(path):
     t = rice.thumb_path(path)
+    if not t.exists():
+        rice.build_thumbs([path], quiet=True)  # cached for next time
     with Image.open(t if t.exists() else path) as im:
         im.draft("RGB", (320, 180))
         return surface(ImageOps.fit(im.convert("RGB"), (320, 180), Image.BILINEAR))
@@ -165,7 +168,19 @@ def text(cr, s, x, y, size, color, alpha=1.0, weight="", font=FONT, align="left"
 
 
 def pretty(path):
-    return path.parent.name, path.stem.replace("_", " ").replace("-", " ")
+    """(label, title): "SPACE" / "ROSE-PINE · PHOTOGRAPHY", and the picture's title."""
+    src, folder, title, _credit = rice.describe(path)
+    return (f"{src} · {folder}" if folder else src), title
+
+
+def contain(path, w, h):
+    """The whole picture, scaled to fit inside w x h (never up). Returns (surface, original size)."""
+    with Image.open(path) as im:
+        size = im.size
+        im.draft("RGB", (w, h))
+        im = im.convert("RGB")
+        im.thumbnail((w, h), Image.LANCZOS)
+        return surface(im), size
 
 
 # ---------------------------------------------------------------- swww-style transitions
@@ -307,7 +322,8 @@ class Picker(Gtk.Window):
         self.animate = st.get("animations", True)
         self.mode = st.get("mode", "personal")
         self.items = rice.wallpapers(self.mode)
-        self.names = [f"{p.parent.name}/{p.name}".lower() for p in self.items]
+        self.names = [f"{p.relative_to(rice.WALLS) if p.is_relative_to(rice.WALLS) else p.name} {pretty(p)[1]}".lower()
+                      for p in self.items]
         self.view = list(range(len(self.items)))
         self.query = ""
         cur = st.get("wallpaper")
@@ -821,19 +837,19 @@ class Picker(Gtk.Window):
             text(cr, val, kx + kw - 12, ky + 88 + i * 20, 13, fg, a, font=MONO, align="right")
 
         # dock
-        dw, dh = 440, 44
-        dx, dy = (W - dw) / 2, H - dh
-        rrect(cr, dx, dy, dw, dh + 10, 10)
-        cr.set_source_rgba(*bg, 0.92 * a)
-        cr.fill()
+        dw, dh = 460, 36  # floating pill, as chiron-rice styles the real dock
+        dx, dy = (W - dw) / 2, H - dh - 4
+        rrect(cr, dx, dy, dw, dh, 14)
+        cr.set_source_rgba(*bg, 0.94 * a)
+        cr.fill_preserve()
+        cr.set_source_rgba(*acc, 0.55 * a)
+        cr.set_line_width(1)
+        cr.stroke()
         for i in range(10):
-            cx = dx + 26 + i * (dw - 52) / 9
-            rrect(cr, cx - 11, dy + 10, 22, 22, 5)
+            cx = dx + 30 + i * (dw - 60) / 9
+            rrect(cr, cx - 11, dy + 7, 22, 22, 5)
             cr.set_source_rgba(*fg, 0.9 * a)
             cr.fill()
-        cr.rectangle(dx + 18, dy + 38, 16, 3)
-        cr.set_source_rgba(*acc, a)
-        cr.fill()
 
     def draw_ui(self, cr, now, th, ui):
         W, H = self.W, self.H
@@ -936,7 +952,338 @@ class Picker(Gtk.Window):
         text(cr, hint, W / 2, H * 0.955 + slide, H * 0.016, muted, ui * 0.9, align="center")
 
 
+# ---------------------------------------------------------------- review: keep or remove each picture
+
+THEME = {"bg": (0.043, 0.039, 0.071), "surface": (0.10, 0.09, 0.15), "fg": (0.93, 0.91, 0.96),
+         "muted": (0.58, 0.55, 0.68), "keep": (0.545, 0.361, 0.965), "remove": (0.957, 0.247, 0.369)}
+
+
+class Review(Gtk.Window):
+    """`chiron walls review`: every picture not yet reviewed, one at a time and whole, with Keep and
+    Remove. Each choice is saved at once (Esc stops, the next run carries on); removed pictures leave
+    the disk when the review ends (rice.apply_review)."""
+
+    def __init__(self):
+        super().__init__(title="Chiron wallpaper review")
+        self.review = rice.load_review()
+        pics = rice.all_pictures()
+        self.queue = [p for p in pics if self.rel(p) not in self.review["keep"]]
+        self.total, self.before = len(pics), len(pics) - len(self.queue)
+        self.i, self.history, self.kept, self.removed = 0, [], 0, 0
+        display = Gdk.Display.get_default()
+        try:
+            _, px, py = display.get_default_seat().get_pointer().get_position()
+            mon = display.get_monitor_at_point(px, py)
+        except Exception:  # noqa: BLE001
+            mon = display.get_primary_monitor() or display.get_monitor(0)
+        g = mon.get_geometry()
+        self.W, self.H = g.width, g.height
+        self.mw, self.mh = int(self.W * 0.84), int(self.H * 0.6)  # largest picture size
+        self.move(g.x, g.y)
+        self.set_default_size(self.W, self.H)
+        self.set_decorated(False)
+        self.set_app_paintable(True)
+        self.set_keep_above(True)
+        for i in range(display.get_n_monitors()):
+            if display.get_monitor(i) == mon:
+                self.fullscreen_on_monitor(self.get_screen(), i)
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.KEY_RELEASE_MASK | Gdk.EventMask.BUTTON_PRESS_MASK
+                        | Gdk.EventMask.POINTER_MOTION_MASK)
+        self.connect("draw", self.on_draw)
+        self.connect("key-press-event", self.on_key)
+        self.connect("key-release-event", self.on_key_release)
+        self.connect("button-press-event", self.on_click)
+        self.connect("motion-notify-event", self.on_motion)
+        self.connect("map-event", lambda *a: GLib.timeout_add(80, self.grab))
+        self.connect("delete-event", lambda *a: self.finish())
+        # One press, one choice. A held key repeats (and on a busy PC a late key release makes the
+        # X server repeat by itself): left alone, that would keep or remove pictures nobody saw.
+        self.held, self.last_choice = {}, 0.0
+        self.cache, self.blurs = OrderedDict(), OrderedDict()
+        self.lock, self.wake, self.closing = threading.Lock(), threading.Event(), False
+        self.leaving = []  # cards on their way out: {"src", "rect", "kind", "tw"}
+        self.enter_tw = Tween(0, 1, 0.45)
+        self.backs, self.flash, self.buttons, self.hover = [], {}, {}, None
+        self.phase, self.message = "review", ""
+        threading.Thread(target=self.loader, daemon=True).start()
+        self.add_tick_callback(self.tick)
+
+    def rel(self, p):
+        return str(p.relative_to(rice.WALLS))
+
+    def grab(self):
+        Gdk.Display.get_default().get_default_seat().grab(self.get_window(), Gdk.SeatCapabilities.KEYBOARD,
+                                                          False, None, None, None)
+        return False
+
+    # loading: the current picture and the next three, whole and fitted, with blurred backdrops
+    def loader(self):
+        while not self.closing:
+            job = None
+            with self.lock:
+                for j in range(self.i, min(self.i + 4, len(self.queue))):
+                    if j not in self.cache:
+                        job = j
+                        break
+            if job is None:
+                self.wake.wait(0.3)
+                self.wake.clear()
+                continue
+            path = self.queue[job]
+            try:
+                res, blur = contain(path, self.mw, self.mh), blurred(path, self.W, self.H)
+            except Exception:  # noqa: BLE001 - unreadable: only its name shows
+                res, blur = (None, (0, 0)), None
+            GLib.idle_add(self.loaded, job, res, blur)
+
+    def loaded(self, j, res, blur):
+        with self.lock:
+            self.cache[j], self.blurs[j] = res, blur
+            for k in [k for k in self.cache if k < self.i - 3]:
+                self.cache.pop(k, None)
+                self.blurs.pop(k, None)
+        if j == self.i:
+            self.enter_tw = Tween(0, 1, 0.35)
+            self.push_back()
+        self.queue_draw()
+        return False
+
+    def push_back(self):
+        b = self.blurs.get(self.i)
+        if b is not None:
+            self.backs.append({"src": b, "tw": Tween(0, 1, 0.5)})
+
+    def card_rect(self, j):
+        src = self.cache.get(j, (None, None))[0]
+        w, h = (src.get_width(), src.get_height()) if src is not None else (self.mw * 0.5, self.mh * 0.5)
+        return (self.W - w) / 2, self.H * 0.11 + (self.mh - h) / 2, w, h
+
+    # choices
+    def decide(self, kind):
+        now = time.monotonic()
+        if self.phase != "review" or self.i >= len(self.queue) or now - self.last_choice < 0.2:
+            return  # 0.2 s apart at least: a double-click is one choice
+        self.last_choice = now
+        (self.review["keep"] if kind == "keep" else self.review["drop"]).add(self.rel(self.queue[self.i]))
+        rice.save_review(self.review)  # saved at once: a crash or Esc loses nothing
+        self.history.append((self.i, kind))
+        self.kept += kind == "keep"
+        self.removed += kind == "remove"
+        src = self.cache.get(self.i, (None, None))[0]
+        if src is not None:
+            self.leaving.append({"src": src, "rect": self.card_rect(self.i), "kind": kind, "tw": Tween(0, 1, 0.42, ease_in_out)})
+        self.flash[kind] = Tween(1, 0, 0.35)
+        self.i += 1
+        self.enter_tw = Tween(0, 1, 0.38)
+        self.push_back()
+        self.wake.set()
+        if self.i >= len(self.queue):
+            self.finish()
+        self.queue_draw()
+
+    def undo(self):
+        if self.phase != "review" or not self.history:
+            return
+        j, kind = self.history.pop()
+        self.review["keep" if kind == "keep" else "drop"].discard(self.rel(self.queue[j]))
+        rice.save_review(self.review)
+        self.kept -= kind == "keep"
+        self.removed -= kind == "remove"
+        self.i, self.leaving = j, []
+        self.enter_tw = Tween(0, 1, 0.38)
+        self.push_back()
+        self.wake.set()
+        self.queue_draw()
+
+    def finish(self):
+        """Stop, or all done: take the removed pictures off the disk, then close."""
+        if self.phase != "review":
+            return True
+        self.phase = "closing"
+        self.message = f"Removing {self.removed} picture{'s' if self.removed != 1 else ''} …" if self.removed else "Saving …"
+
+        def work():
+            try:
+                rice.apply_review()
+                msg = "Done."
+            except (Exception, SystemExit) as e:  # noqa: BLE001
+                msg = f"Couldn't remove everything: {e}"
+            GLib.idle_add(self.closed, msg)
+        threading.Thread(target=work, daemon=True).start()
+        self.queue_draw()
+        return True
+
+    def closed(self, msg):
+        left = len(self.queue) - self.i
+        self.message = f"{msg}  Kept {self.kept}, removed {self.removed}" + (f", {left} left for next time." if left else ". All reviewed.")
+        self.phase = "done"
+        GLib.timeout_add(2500, self.quit)
+        self.queue_draw()
+        return False
+
+    def quit(self):
+        self.closing = True
+        self.wake.set()
+        Gtk.main_quit()
+        return False
+
+    # input
+    def on_key(self, _w, ev):
+        k = Gdk.keyval_name(ev.keyval)
+        last = self.held.get(ev.keyval)
+        self.held[ev.keyval] = ev.time
+        if last is not None and ev.time - last < 700:
+            return True  # auto-repeat of a key that's still down
+        if self.phase == "done":
+            self.quit()
+        elif k in ("Right", "y", "Y", "k", "K", "Return", "KP_Enter"):
+            self.decide("keep")
+        elif k in ("Left", "n", "N", "d", "D", "Delete"):
+            self.decide("remove")
+        elif k in ("BackSpace", "u", "U") or (k in ("z", "Z") and ev.state & Gdk.ModifierType.CONTROL_MASK):
+            self.undo()
+        elif k in ("Escape", "q", "Q"):
+            self.finish()
+        return True
+
+    def on_key_release(self, _w, ev):
+        self.held.pop(ev.keyval, None)
+        return True
+
+    def on_click(self, _w, ev):
+        if self.phase == "done":
+            self.quit()
+            return True
+        for kind, (x, y, w, h) in list(self.buttons.items()):
+            if x <= ev.x <= x + w and y <= ev.y <= y + h:
+                {"keep": lambda: self.decide("keep"), "remove": lambda: self.decide("remove"),
+                 "undo": self.undo, "stop": self.finish}[kind]()
+                break
+        return True
+
+    def on_motion(self, _w, ev):
+        hover = next((k for k, (x, y, w, h) in self.buttons.items() if x <= ev.x <= x + w and y <= ev.y <= y + h), None)
+        if hover != self.hover:
+            self.hover = hover
+            self.queue_draw()
+        return False
+
+    def tick(self, _widget, _clock):
+        now = time.monotonic()
+        self.leaving = [c for c in self.leaving if not c["tw"].done(now)]
+        while len(self.backs) > 1 and self.backs[1]["tw"].done(now):
+            self.backs.pop(0)
+        busy = self.leaving or not self.enter_tw.done(now) or any(not b["tw"].done(now) for b in self.backs)
+        if busy or any(not t.done(now) for t in self.flash.values()) or self.phase == "closing":
+            self.queue_draw()
+        return True
+
+    # drawing
+    def button(self, cr, kind, label, x, y, w, h, col, filled, now):
+        self.buttons[kind] = (x, y, w, h)
+        fl = self.flash[kind].value(now) if kind in self.flash else 0.0
+        rrect(cr, x, y, w, h, h / 2)
+        cr.set_source_rgba(*col, min(1.0, (0.9 if filled else 0.14) + (0.1 if self.hover == kind else 0) + 0.35 * fl))
+        cr.fill_preserve()
+        cr.set_source_rgba(*col, 1.0)
+        cr.set_line_width(2)
+        cr.stroke()
+        text(cr, label, x + w / 2, y + h / 2 - h * 0.27, h * 0.36, (1, 1, 1) if filled else col, 1.0, "Bold", align="center")
+
+    def on_draw(self, _w, cr):
+        now = time.monotonic()
+        W, H, th = self.W, self.H, THEME
+        cr.set_source_rgb(*th["bg"])
+        cr.paint()
+        for b in self.backs:
+            paint_scaled(cr, b["src"], 0, 0, W, H, b["tw"].value(now) * 0.9, cairo.FILTER_GOOD)
+        cr.set_source_rgba(*th["bg"], 0.68)
+        cr.paint()
+        self.buttons = {}
+        # header and progress bar
+        reviewed = self.before + self.i
+        text(cr, "Review wallpapers", W * 0.08, H * 0.03, H * 0.03, th["fg"], 1, "Bold")
+        text(cr, f"{reviewed} of {self.total} reviewed  ·  {self.removed} removed this time", W * 0.92, H * 0.037,
+             H * 0.018, th["muted"], 1, align="right")
+        rrect(cr, W * 0.08, H * 0.085, W * 0.84, 4, 2)
+        cr.set_source_rgba(*th["fg"], 0.12)
+        cr.fill()
+        if self.total:
+            rrect(cr, W * 0.08, H * 0.085, max(4, W * 0.84 * reviewed / self.total), 4, 2)
+            cr.set_source_rgba(*th["keep"], 1)
+            cr.fill()
+        if not self.queue:
+            msg = ("Nothing to review: every picture has been kept already." if self.total else
+                   "No wallpapers yet: run  chiron walls update")
+            text(cr, msg, W / 2, H * 0.45, H * 0.026, th["fg"], 1, align="center")
+            if self.phase == "review":
+                self.button(cr, "stop", "Close", W / 2 - W * 0.08, H * 0.82, W * 0.16, H * 0.065, th["keep"], True, now)
+            return True
+        # cards leaving: kept ones fly up and to the right, removed ones drop away
+        for c in self.leaving:
+            t = c["tw"].value(now)
+            x, y, w, h = c["rect"]
+            dx, dy, rot = (W * 0.32, -H * 0.18, 0.12) if c["kind"] == "keep" else (-W * 0.05, H * 0.55, -0.16)
+            cr.save()
+            cr.translate(x + w / 2 + dx * t, y + h / 2 + dy * t)
+            cr.rotate(rot * t)
+            cr.scale(1 - 0.15 * t, 1 - 0.15 * t)
+            rrect(cr, -w / 2, -h / 2, w, h, 14)
+            cr.clip()
+            cr.set_source_surface(c["src"], -w / 2, -h / 2)
+            cr.paint_with_alpha(1 - t)
+            if c["kind"] == "remove":
+                cr.set_source_rgba(*th["remove"], 0.45 * (1 - t))
+                cr.paint()
+            cr.restore()
+        if self.i < len(self.queue):
+            path = self.queue[self.i]
+            src, size = self.cache.get(self.i, (None, (0, 0)))
+            x, y, w, h = self.card_rect(self.i)
+            e = self.enter_tw.value(now)
+            if src is not None:
+                sc = 0.92 + 0.08 * e
+                cr.save()
+                cr.translate(x + w / 2, y + h / 2)
+                cr.scale(sc, sc)
+                for i in range(6):  # shadow
+                    rrect(cr, -w / 2 - i * 3, -h / 2 - i * 3 + 12, w + i * 6, h + i * 6, 14 + i * 3)
+                    cr.set_source_rgba(0, 0, 0, 0.06 * e)
+                    cr.fill()
+                rrect(cr, -w / 2, -h / 2, w, h, 14)
+                cr.clip()
+                cr.set_source_surface(src, -w / 2, -h / 2)
+                cr.paint_with_alpha(e)
+                cr.restore()
+            else:
+                text(cr, "Loading …", W / 2, H * 0.38, H * 0.022, th["muted"], 1, align="center")
+            label, title = pretty(path)
+            credit = rice.describe(path)[3]
+            iy = H * 0.11 + self.mh + H * 0.02
+            text(cr, label.upper(), W / 2, iy, H * 0.015, th["keep"], 1, "Bold", align="center")
+            text(cr, title, W / 2, iy + H * 0.024, H * 0.024, th["fg"], 1, align="center", width=W * 0.8)
+            sub = "  ·  ".join(s for s in (f"{size[0]} × {size[1]}" if size[0] else "", credit) if s)
+            text(cr, sub, W / 2, iy + H * 0.06, H * 0.015, th["muted"], 1, align="center", width=W * 0.84)
+        if self.phase == "review":
+            bw, bh, by = W * 0.17, H * 0.068, H * 0.855
+            self.button(cr, "remove", "✕   Remove", W / 2 - bw - W * 0.015, by, bw, bh, th["remove"], False, now)
+            self.button(cr, "keep", "✓   Keep", W / 2 + W * 0.015, by, bw, bh, th["keep"], True, now)
+            if self.history:
+                self.button(cr, "undo", "Undo", W * 0.08, by + bh * 0.2, W * 0.07, bh * 0.6, th["muted"], False, now)
+            self.button(cr, "stop", "Stop", W * 0.85, by + bh * 0.2, W * 0.07, bh * 0.6, th["muted"], False, now)
+            text(cr, "←  or  N   remove        →  or  Y   keep        Backspace   undo        Esc   stop (choices are saved)",
+                 W / 2, H * 0.95, H * 0.015, th["muted"], 0.9, align="center")
+        else:
+            text(cr, self.message, W / 2, H * 0.875, H * 0.022, th["fg"], 1, align="center")
+        return True
+
+
 def main(argv):
+    if argv and argv[0] == "review":
+        win = Review()
+        win.show_all()
+        Gtk.main()
+        return 0
     if not argv or argv[0] == "pick":
         win = Picker()
         win.show_all()
