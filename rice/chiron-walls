@@ -3,7 +3,7 @@
 Stick desktop theme. Runs as the desktop user; the theme itself comes from chiron-rice.
 
   chiron-walls pick                     full-screen picker: browse with a live preview of the theme
-                                        on the wallpaper, Enter applies it, Esc goes back
+                                        on the wallpaper, Enter applies it, Delete removes it, Esc goes back
   chiron-walls review                   every picture not yet reviewed, one at a time: Keep or Remove
   chiron-walls transition OLD NEW [FX]  animate the desktop from OLD to NEW behind the windows
                                         (FX: grow, wipe, wave, fade or random); prints "ready" once
@@ -350,11 +350,14 @@ class Picker(Gtk.Window):
         for i in range(display.get_n_monitors()):
             if display.get_monitor(i) == mon:
                 self.fullscreen_on_monitor(self.get_screen(), i)
-        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.KEY_RELEASE_MASK | Gdk.EventMask.SCROLL_MASK
+                        | Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
         self.connect("draw", self.on_draw)
         self.connect("key-press-event", self.on_key)
+        self.connect("key-release-event", self.on_key_release)
         self.connect("scroll-event", self.on_scroll)
         self.connect("button-press-event", self.on_click)
+        self.connect("motion-notify-event", self.on_motion)
         self.connect("map-event", self.on_map)
         self.connect("delete-event", lambda *a: self.quit(1))
 
@@ -374,6 +377,10 @@ class Picker(Gtk.Window):
         self.phase, self.phase_tw = "open", Tween(0, 1, 0.6 if self.animate else 0.01, ease_out)
         self.mock_tw = Tween(1, 1, 0.01)
         self.apply_done = None
+        # Delete removes the selected wallpaper (saved like the review; Ctrl+Z brings it back)
+        self.gone, self.removed, self.dropping, self.gap = set(), [], [], None
+        self.toast, self.held, self.last_remove = None, {}, 0.0
+        self.remove_btn, self.hover_remove, self.current_removed = None, False, False
         self.last = now
         if self.items:
             self.select(self.sel, fade=False)
@@ -476,7 +483,7 @@ class Picker(Gtk.Window):
         self.query = q
         toks = q.lower().split()
         keep = self.view[self.sel] if self.view else None
-        self.view = [i for i, n in enumerate(self.names) if all(t in n for t in toks)]
+        self.view = [i for i, n in enumerate(self.names) if i not in self.gone and all(t in n for t in toks)]
         new = self.view.index(keep) if keep in self.view else 0
         self.pos = new - 0.6 if self.view else 0.0
         self.select(new)
@@ -503,6 +510,57 @@ class Picker(Gtk.Window):
     def applied(self, code):
         self.exit_code, self.apply_done = code, time.monotonic()
         return False
+
+    def remove_selected(self):
+        """Delete or the card's ✕: this wallpaper goes. Saved like a Remove in the review, so it stays
+        gone after updates; the file leaves the disk when the picker closes. Ctrl+Z brings it back."""
+        now = time.monotonic()
+        if self.phase != "browse" or not self.view or now - self.last_remove < 0.25:
+            return  # 0.25 s apart at least: a double-click removes one
+        idx = self.view[self.sel]
+        path = self.items[idx]
+        if not path.is_relative_to(rice.WALLS):
+            self.toast = ("Only downloaded wallpapers can be removed", now)
+            return
+        self.last_remove = now
+        review = rice.load_review()
+        rel = str(path.relative_to(rice.WALLS))
+        was_kept = rel in review["keep"]  # Ctrl+Z puts it back exactly as it was
+        review["drop"].add(rel)
+        review["keep"].discard(rel)
+        rice.save_review(review)
+        self.removed.append((idx, was_kept))
+        self.gone.add(idx)
+        self.current_removed = self.current_removed or path == self.current
+        src = self.get("card", idx) or self.get("thumb", idx)
+        if src is not None:  # the card drops away; the next picture fades in behind it
+            self.dropping.append({"src": src, "tw": Tween(0, 1, 0.5 if self.animate else 0.01, ease_in_out)})
+        self.view.pop(self.sel)
+        self.gap = (self.sel, Tween(1, 0, 0.3 if self.animate else 0.01))  # the filmstrip closes up
+        self.layers = []
+        if self.view:
+            self.select(min(self.sel, len(self.view) - 1))
+        self.toast = (f"Removed “{pretty(path)[1]}”   ·   Ctrl+Z to undo", now)
+        self.queue_draw()
+
+    def undo_remove(self):
+        if self.phase != "browse" or not self.removed:
+            return
+        idx, was_kept = self.removed.pop()
+        path = self.items[idx]
+        review = rice.load_review()
+        rel = str(path.relative_to(rice.WALLS))
+        review["drop"].discard(rel)
+        if was_kept:
+            review["keep"].add(rel)
+        rice.save_review(review)
+        self.gone.discard(idx)
+        if path == self.current:
+            self.current_removed = False
+        self.set_query(self.query)
+        if idx in self.view:
+            self.select(self.view.index(idx))
+        self.toast = (f"Restored “{pretty(path)[1]}”", time.monotonic())
 
     def cancel(self):
         if self.phase not in ("browse", "open"):
@@ -531,7 +589,12 @@ class Picker(Gtk.Window):
         k = Gdk.keyval_name(ev.keyval)
         ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
         moves = {"Right": 1, "Down": 1, "Left": -1, "Up": -1, "Page_Down": 8, "Page_Up": -8}
-        if k in moves:
+        if k in ("Delete", "KP_Delete") or (ctrl and k in ("z", "Z")):
+            last = self.held.get(ev.keyval)
+            self.held[ev.keyval] = ev.time
+            if last is None or ev.time - last >= 700:  # a held key (auto-repeat) acts once
+                self.remove_selected() if k in ("Delete", "KP_Delete") else self.undo_remove()
+        elif k in moves:
             self.select(self.sel + moves[k])
         elif k == "Home":
             self.select(0)
@@ -539,8 +602,8 @@ class Picker(Gtk.Window):
             self.select(len(self.view) - 1)
         elif k in ("Return", "KP_Enter"):
             self.confirm()
-        elif k == "Escape":
-            self.set_query("") if self.query else self.cancel()
+        elif k == "Escape":  # the current wallpaper removed: keep the one on show instead of going back
+            self.set_query("") if self.query else (self.confirm() if self.current_removed and self.view else self.cancel())
         elif k == "BackSpace":
             self.set_query(self.query[:-1])
         elif k == "Tab":
@@ -555,6 +618,18 @@ class Picker(Gtk.Window):
                 self.set_query(self.query + ch)
         return True
 
+    def on_key_release(self, _w, ev):
+        self.held.pop(ev.keyval, None)
+        return True
+
+    def on_motion(self, _w, ev):
+        b = self.remove_btn
+        hover = bool(b) and b[0] <= ev.x <= b[0] + b[2] and b[1] <= ev.y <= b[1] + b[3]
+        if hover != self.hover_remove:
+            self.hover_remove = hover
+            self.queue_draw()
+        return False
+
     def on_scroll(self, _w, ev):
         if self.phase == "browse":
             d = {Gdk.ScrollDirection.UP: -1, Gdk.ScrollDirection.LEFT: -1, Gdk.ScrollDirection.DOWN: 1,
@@ -568,6 +643,10 @@ class Picker(Gtk.Window):
 
     def on_click(self, _w, ev):
         if self.phase != "browse":
+            return True
+        b = self.remove_btn
+        if b and b[0] <= ev.x <= b[0] + b[2] and b[1] <= ev.y <= b[1] + b[3]:
+            self.remove_selected()
             return True
         if self.cx <= ev.x <= self.cx + self.cw and self.cy <= ev.y <= self.cy + self.ch:
             self.confirm()
@@ -598,6 +677,9 @@ class Picker(Gtk.Window):
             busy = busy or any(not l["tw"].done(now) for l in layers)
         busy = busy or not self.theme_tw.done(now) or not self.mock_tw.done(now) or not self.phase_tw.done(now)
         busy = busy or any(now - t < 0.3 for t in self.loaded_at.values())
+        self.dropping = [d for d in self.dropping if not d["tw"].done(now)]
+        busy = busy or bool(self.dropping) or bool(self.gap and not self.gap[1].done(now))
+        busy = busy or bool(self.toast and now - self.toast[1] < 3.6)
         if self.phase == "open" and self.phase_tw.done(now):
             self.phase = "browse"
             if self.view:  # the opening showed the current wallpaper; settle on the selected one
@@ -687,6 +769,27 @@ class Picker(Gtk.Window):
             cr.set_source_rgba(*th["accent"], 0.85 * t)
             cr.set_line_width(2)
             cr.stroke()
+        for d in self.dropping:  # a removed wallpaper falls away, tinted red
+            k = d["tw"].value(now)
+            cr.save()
+            cr.translate(x + w / 2, y + h / 2 + self.H * 0.5 * k)
+            cr.rotate(-0.14 * k)
+            cr.scale(1 - 0.15 * k, 1 - 0.15 * k)
+            rrect(cr, -w / 2, -h / 2, w, h, r)
+            cr.clip()
+            paint_scaled(cr, d["src"], -w / 2, -h / 2, w, h, 1 - k, cairo.FILTER_BILINEAR)
+            cr.set_source_rgba(*THEME["remove"], 0.45 * (1 - k))
+            cr.paint()
+            cr.restore()
+        self.remove_btn = None
+        if self.phase == "browse" and self.view:  # ✕ in the card's corner removes the wallpaper
+            br = max(14, self.H * 0.022)
+            bx, by = x + w - br - 14, y + br + 14
+            cr.arc(bx, by, br, 0, 2 * math.pi)
+            cr.set_source_rgba(*(THEME["remove"] if self.hover_remove else (0, 0, 0)), 0.9 if self.hover_remove else 0.5)
+            cr.fill()
+            text(cr, "✕", bx, by - br * 0.62, br * 1.1, (1, 1, 1), 1, "Bold", align="center")
+            self.remove_btn = (bx - br, by - br, 2 * br, 2 * br)
 
     def draw_mock(self, cr, th, a):
         """The desktop as it will look, at real size (the card scales it down)."""
@@ -916,8 +1019,9 @@ class Picker(Gtk.Window):
         fy += slide * 2
         th_h = tw * 9 / 16
         lo, hi = int(self.pos - 7), int(self.pos + 8)
-        for j in range(max(0, lo), min(len(self.view), hi + 1)):
-            d = j - self.pos
+        gap_i, gap_v = (self.gap[0], self.gap[1].value(now)) if self.gap else (0, 0.0)
+        for j in range(max(0, lo), min(len(self.view), hi + 2)):
+            d = j - self.pos + (gap_v if j >= gap_i else 0)
             near = clamp(1 - abs(d))
             sc = 1 + 0.22 * near
             w_, h_ = tw * sc, th_h * sc
@@ -947,8 +1051,16 @@ class Picker(Gtk.Window):
                 cr.set_source_rgba(*acc, near * a)
                 cr.set_line_width(2.5)
                 cr.stroke()
+        if self.toast and now - self.toast[1] < 3.6:  # what Delete / Ctrl+Z just did
+            a = ui * clamp((3.6 - (now - self.toast[1])) / 0.5)
+            tw_ = min(W * 0.6, len(self.toast[0]) * H * 0.0105 + 40)
+            rrect(cr, W / 2 - tw_ / 2, H * 0.905, tw_, H * 0.04, H * 0.02)
+            cr.set_source_rgba(*th["surface2"], 0.96 * a)
+            cr.fill()
+            text(cr, self.toast[0], W / 2, H * 0.913, H * 0.017, fg, a, align="center", width=tw_ - 30)
         # key hints
-        hint = "←  →  browse     type  search     Tab  preview on/off     Enter  apply     Esc  back"
+        esc = "use this one" if self.current_removed else "back"
+        hint = (f"←  →  browse     type  search     Tab  preview     Delete  remove     Enter  apply     Esc  {esc}")
         text(cr, hint, W / 2, H * 0.955 + slide, H * 0.016, muted, ui * 0.9, align="center")
 
 
@@ -1288,6 +1400,14 @@ def main(argv):
         win = Picker()
         win.show_all()
         Gtk.main()
+        if win.removed:  # wallpapers removed with Delete leave the disk now, once the picker is gone
+            win.hide()
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            try:
+                rice.apply_review()
+            except (Exception, SystemExit) as e:  # noqa: BLE001
+                print(f"chiron-walls: {e}", file=sys.stderr)
         return win.exit_code
     if argv[0] == "transition" and len(argv) >= 3:
         try:

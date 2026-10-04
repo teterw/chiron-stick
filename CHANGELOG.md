@@ -4,6 +4,11 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-04
+
+### Added
+- Remove a wallpaper you don't like straight from the picker (`Super+W`): **Delete** or the **✕** on the picture. It drops away, the next one slides in, and it's removed the same way as in `chiron walls review` (gone after updates too). **Ctrl+Z** brings it back exactly as it was. Remove the wallpaper that's on your desktop and Esc uses the one on show instead of going back
+
 ## [0.6.0] - 2026-10-04
 
 New wallpapers, picked by Tete: the first collection had many AI-captioned and AI-looking pictures.

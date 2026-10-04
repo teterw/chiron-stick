@@ -65,7 +65,7 @@ The desktop takes its colours from the wallpaper: change the wallpaper and every
 
 | Keys or command | What it does |
 |---|---|
-| `Super+W` | Pick a wallpaper. ← → browse, type to search, Tab shows the plain picture without the preview, Enter applies, Esc goes back |
+| `Super+W` | Pick a wallpaper. ← → browse, type to search, Tab shows the plain picture without the preview, Enter applies, Esc goes back. **Delete** (or the ✕ on the picture) removes a wallpaper you don't like; Ctrl+Z brings it back |
 | `Super+Shift+W` | Random wallpaper |
 | `Super+D` | Find and start an app |
 | `Super+Return` | Terminal |
