@@ -49,6 +49,95 @@ class Colours(unittest.TestCase):
         self.assertTrue(0.68 < h < 0.78, f"pure grey has no hue, so the accent is Chiron violet, not red (hue {h:.2f})")
 
 
+class SeeThroughTerminal(unittest.TestCase):
+    """The terminal is 85% opaque with a compositor: the wallpaper's bright parts show through, and
+    its text must stay as readable as on the solid background."""
+
+    def check(self, pal, bright):
+        c = rice.derive(pal)
+        t = rice.terminal_colours(c, bright)
+        self.assertGreaterEqual(t["alpha"], 0.85)
+        seen = rice.mix(bright, c["bg"], t["alpha"])  # what the eye sees behind the text
+        self.assertGreaterEqual(rice.contrast(t["fg"], seen), 7.0, "text readable (7:1)")
+        for i, col in enumerate(t["term"]):
+            if i not in (0, 8):
+                self.assertGreaterEqual(rice.contrast(col, seen), 4.5, f"terminal colour {i}")
+        return c, t
+
+    def test_bright_backdrop(self):
+        for pal in (BRIGHT, DARK, GREY):
+            c, t = self.check(pal, rice.WHITE)
+            self.assertEqual(t["alpha"], 0.85, "lighter text is enough: the see-through look stays")
+
+    def test_dark_backdrop_changes_nothing(self):
+        c, t = self.check(DARK, rice.BLACK)
+        self.assertEqual((t["fg"], t["term"], t["alpha"]), (c["fg"], c["term"], 0.85))
+
+    def test_settings(self):
+        c = rice.derive(DARK)
+        with mock.patch.object(rice, "bright_backdrop", return_value=rice.WHITE):
+            solid = dict((p, v) for p, v, _ in rice.terminal_settings(c, "wall.png", solid=True))
+            clear = dict((p, v) for p, v, _ in rice.terminal_settings(c, "wall.png", solid=False))
+        self.assertEqual(solid["/background-mode"], "TERMINAL_BACKGROUND_SOLID")
+        self.assertEqual(solid["/color-foreground"], rice.rgb2hex(c["fg"]), "no compositor: colours as before")
+        self.assertEqual(clear["/background-mode"], "TERMINAL_BACKGROUND_TRANSPARENT")
+        self.assertEqual(clear["/background-darkness"], 0.85)
+
+    def test_bright_backdrop_of_an_image(self):
+        """A bright sky counts, a few stars don't."""
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(rice, "CACHE", Path(tmp)):
+            for name, white_rows, expect in (("sky.png", 20, rice.WHITE), ("stars.png", 1, rice.BLACK)):
+                im = Image.new("RGB", (100, 100), (0, 0, 0))
+                im.paste((255, 255, 255), (0, 0, 100, white_rows))
+                im.save(Path(tmp) / name)
+                got = rice.bright_backdrop(Path(tmp) / name)
+                self.assertLess(max(abs(a - b) for a, b in zip(got, expect)), 0.05, name)
+
+
+class WindowTheme(unittest.TestCase):
+    def test_bigger_shadows(self):
+        """xfwm4 reads shadow sizes only from the window theme's themerc (not xfconf): Chiron-wm is
+        Mint's Default theme with a GNOME-like shadow."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "Default" / "xfwm4"
+            base.mkdir(parents=True)
+            (base / "themerc").write_text("button_spacing=2\nshadow_opacity=30\nshadow_delta_y=-8\n")
+            (base / "close-active.png").write_bytes(b"png")
+            with mock.patch.multiple(rice, HOME=Path(tmp), XFWM_BASE=base):
+                rice.wm_theme()
+                rice.wm_theme()  # again: same result
+            out = Path(tmp) / ".local/share/themes" / rice.WM_THEME / "xfwm4"
+            rc = (out / "themerc").read_text().splitlines()
+            self.assertIn("button_spacing=2", rc)
+            self.assertIn("shadow_opacity=70", rc)
+            self.assertEqual(sum(l.startswith("shadow_opacity=") for l in rc), 1)
+            self.assertEqual((out / "close-active.png").resolve(), base / "close-active.png")
+
+
+class Keys(unittest.TestCase):
+    def test_no_key_bound_twice(self):
+        keys = [k for k, _ in rice.COMMAND_KEYS] + [k for k, _ in rice.WM_KEYS]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertIn(("<Super>m", "show_desktop_key"), rice.WM_KEYS)
+        actions = [a for _, a in rice.WM_KEYS]
+        self.assertEqual(len(actions), len(set(actions)), "xfwm4 keeps one key per action")
+        self.assertNotIn("close_window_key", actions, "Alt+F4 must keep closing windows")
+
+    def test_old_keys_of_our_actions_go(self):
+        """xfwm4 keeps one key per action, and which one wins is arbitrary: Mint's <Super>KP_Left kept
+        tile_left and <Super>Left did nothing. So other keys for the actions we set are removed."""
+        listing = ("/xfwm4/custom/<Super>KP_Left      tile_left_key\n"
+                   "/xfwm4/custom/<Super>Left         tile_left_key\n"
+                   "/xfwm4/custom/<Alt>F4             close_window_key\n"
+                   "/xfwm4/custom/<Alt>F9             hide_window_key\n"
+                   "/xfwm4/default/<Alt>F9            hide_window_key\n"
+                   "/xfwm4/custom/<Super>q            close_window_key\n"  # 0.8.0 test build: a command now
+                   "/commands/custom/<Super>e         thunar\n")
+        self.assertEqual(rice.wm_key_conflicts(listing),
+                         ["/xfwm4/custom/<Super>KP_Left", "/xfwm4/custom/<Alt>F9", "/xfwm4/custom/<Super>q"])
+
+
 class Layout(unittest.TestCase):
     def test_islands_match_plugin_order(self):
         layout = rice.load_layout()

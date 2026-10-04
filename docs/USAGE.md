@@ -30,7 +30,7 @@ Do these with the owner, every time:
 
 3. Pick the entry for the stick (often "UEFI: <USB drive name>"). **Don't change any firmware settings**: changing them can trigger a BitLocker recovery prompt on the owner's Windows.
 4. In the Chiron Stick menu, pick **Linux Mint** (or **MemTest86 (RAM test)** for a full memory test).
-5. Type the stick's disk passphrase, then log in.
+5. Type the stick's disk passphrase. That's the only password at boot: the desktop opens by itself. It locks after 10 minutes without use (or `Super+L`), and then it asks for your password.
 
 If the PC refuses to boot the stick with a Secure Boot error:
 - Newer PCs that trust only Microsoft's 2023 certificate: in the boot menu choose **Boot from file** → the stick → `EFI/ubuntu/shimx64.efi`.
@@ -69,12 +69,20 @@ The desktop takes its colours from the wallpaper: change the wallpaper and every
 | `Super+Shift+W` | Random wallpaper |
 | `Super+D` | Find and start an app |
 | `Super+Return` | Terminal |
+| `Super+E` | Files |
+| `Super+M` | Minimise all windows; press again to bring them back |
+| `Super+←` / `Super+→` | Window fills the left / right half of the screen |
+| `Super+↑` | Maximise; press again for the old size |
+| `Super+↓` | Minimise the window |
+| `Super+Q` | Close the window |
+| `Super+L` | Lock the screen |
+| `Print` / `Shift+Print` | Screenshot of the whole screen / of an area you drag, saved to `~/Pictures/Screenshots` |
 | `chiron rice mode client` | On someone else's PC: calm wallpapers, no automatic changes |
 | `chiron rice mode personal` | The whole collection, a new wallpaper every 30 minutes |
 | `chiron walls update` | Download or update the wallpaper collections (about 1.3 GB) |
 | `chiron walls review` | Every new wallpaper, one at a time: → or Y keeps it, ← or N removes it, Backspace undoes, Esc stops (it carries on next time). Also in the app menu as *Review wallpapers* |
 
-The stress tests pause wallpaper changes and desktop effects by themselves (`chiron rice pause` and `chiron rice resume` do it by hand). On PCs without working graphics drivers, and in virtual machines, desktop effects stay off so the desktop stays quick. `chiron rice animations off` turns off the animated wallpaper changes too.
+The stress tests pause wallpaper changes and desktop effects by themselves (`chiron rice pause` and `chiron rice resume` do it by hand). With desktop effects on, the terminal is see-through and windows cast soft shadows. On PCs without working graphics drivers, and in virtual machines, desktop effects stay off so the desktop stays quick. `chiron rice animations off` turns off the animated wallpaper changes too.
 
 ## 5. Leave without a trace
 

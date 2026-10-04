@@ -186,6 +186,24 @@ def derive(palette):
             "surface2": surface2, "muted": muted, "term": term}
 
 
+TERM_ALPHA = 0.85  # the see-through terminal (with a compositor), like Tete's Ptyxis
+
+
+def terminal_colours(c, bright, alpha=TERM_ALPHA):
+    """Text colours for the see-through terminal. 15% of the wallpaper shows through, so its bright
+    parts lighten the background: the text is lightened until it's as readable there as on the solid
+    background (7:1, terminal colours 4.5:1). Only if white text can't manage it does the terminal
+    get less see-through."""
+    while True:
+        seen = mix(bright, c["bg"], alpha)
+        fg = toward(c["fg"], WHITE, seen, 7.0)
+        term = [t if i in (0, 8) else toward(t, WHITE, seen, 4.5) for i, t in enumerate(c["term"])]
+        if alpha >= 1.0 or (contrast(fg, seen) >= 7.0 and
+                            all(contrast(t, seen) >= 4.5 for i, t in enumerate(term) if i not in (0, 8))):
+            return {"fg": fg, "term": term, "alpha": round(alpha, 2)}
+        alpha = min(1.0, alpha + 0.05)
+
+
 # ---------------------------------------------------------------- wallpaper collections
 
 SOURCES = RICE / "wallsources.conf"
@@ -680,13 +698,18 @@ def set_wallpaper(img):
         xfconf("xfce4-desktop", p.replace("last-image", "image-style"), 5, "int")  # zoomed
 
 
+def cache_file(img, kind):
+    """Per-image cache file in ~/.cache/chiron/<kind>/ (a changed image gets a new one)."""
+    st = Path(img).stat()
+    return CACHE / kind / (hashlib.sha1(f"{img}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest() + ".json")
+
+
 def run_wallust(img):
     """The wallpaper's 16 colours. wallust just prints them (no config, no templates) and keeps no
     cache: its own cache takes megabytes per image and would grow with every wallpaper. Ours keeps
     the 16 colours per image (the picker previews them too, so preview and result always match)."""
     img = Path(img)
-    st = img.stat()
-    cache = CACHE / "palettes" / (hashlib.sha1(f"{img}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest() + ".json")
+    cache = cache_file(img, "palettes")
     try:
         return json.loads(cache.read_text())
     except (OSError, ValueError):
@@ -704,6 +727,36 @@ def run_wallust(img):
     palette.update(background=hexes[0], foreground=hexes[15], cursor=hexes[7])
     write_atomic(cache, json.dumps(palette))
     return palette
+
+
+def bright_backdrop(img):
+    """The colour of the wallpaper's bright parts (95th percentile of brightness): the worst that can
+    show through the see-through terminal. A bright sky counts, a few stars don't."""
+    cache = cache_file(img, "backdrops")
+    try:
+        return tuple(json.loads(cache.read_text()))
+    except (OSError, ValueError):
+        pass
+    from PIL import Image
+    with Image.open(img) as im:
+        im.draft("RGB", (192, 108))
+        px = [tuple(x / 255 for x in p) for p in im.convert("RGB").resize((96, 54), Image.BILINEAR).getdata()]
+    c = sorted(px, key=luminance)[int(len(px) * 0.95)]
+    write_atomic(cache, json.dumps(c))
+    return c
+
+
+def terminal_settings(c, img, solid):
+    """xfce4-terminal: the wallpaper's colours; see-through like Ptyxis when there's a compositor
+    (without one it can't be, and the solid colours need no adjusting). [(property, value, type)]"""
+    if solid:
+        t, mode = {"fg": c["fg"], "term": c["term"], "alpha": 1.0}, "TERMINAL_BACKGROUND_SOLID"
+    else:
+        t, mode = terminal_colours(c, bright_backdrop(img)), "TERMINAL_BACKGROUND_TRANSPARENT"
+    return [("/color-use-theme", False, "bool"), ("/color-foreground", rgb2hex(t["fg"]), "string"),
+            ("/color-background", rgb2hex(c["bg"]), "string"), ("/color-cursor", rgb2hex(c["accent"]), "string"),
+            ("/color-palette", ";".join(rgb2hex(x) for x in t["term"]), "string"),
+            ("/background-mode", mode, "string"), ("/background-darkness", t["alpha"], "double")]
 
 
 def gtk_theme_files(c, layout, solid):
@@ -786,6 +839,7 @@ def apply(img, quiet=False, transition=None):
     layout = load_layout()
     solid = not compositing()
     theme, files = gtk_theme_files(c, layout, solid)
+    term = terminal_settings(c, img, solid)
     files.update({
         # Personal gtk.css would override the theme with stale colours until a restart, so keep it empty;
         # GTK4/libadwaita apps don't use GTK themes, so they get the colours there (read when they start).
@@ -802,11 +856,8 @@ def apply(img, quiet=False, transition=None):
         write_atomic(path, text)
     if transition and start_transition(old, img, transition):
         time.sleep(0.7)  # let the new wallpaper sweep in halfway, then recolour everything with it
-    xfconf("xfce4-terminal", "/color-use-theme", False, "bool")
-    xfconf("xfce4-terminal", "/color-foreground", rgb2hex(c["fg"]))
-    xfconf("xfce4-terminal", "/color-background", rgb2hex(c["bg"]))
-    xfconf("xfce4-terminal", "/color-cursor", rgb2hex(c["accent"]))
-    xfconf("xfce4-terminal", "/color-palette", ";".join(rgb2hex(t) for t in c["term"]))
+    for prop, value, kind in term:
+        xfconf("xfce4-terminal", prop, value, kind)
     papirus_overlay(folders)
     # systemload graph bars in the accent colour (GdkRGBA is stored as 4 doubles in xfconf)
     r, g, b = c["accent"]
@@ -947,6 +998,67 @@ def install_launchers():
             f"Exec={RICE / 'chiron-rice'} {args}\nIcon={icon}\nCategories=Settings;DesktopSettings;\nTerminal=false\n")
 
 
+WM_THEME = "Chiron-wm"
+XFWM_BASE = Path("/usr/share/themes/Default/xfwm4")
+# Soft GNOME-like shadow: about 22 px at the sides, 14 above, 30 below. xfwm4 blurs over a fixed 36 px
+# box, so x/width/y/height = side-18 / side-18 / top-18 / bottom-18 (signs as xfwm4's settings.c reads them).
+WM_SHADOW = {"shadow_opacity": 70, "shadow_delta_x": 4, "shadow_delta_width": 4,
+             "shadow_delta_y": -4, "shadow_delta_height": 12}
+
+
+def wm_theme():
+    """xfwm4 takes shadow sizes only from the window theme's themerc, never from xfconf. So Chiron-wm
+    is Mint's Default theme (its pictures linked, not copied) with a bigger, softer shadow."""
+    out = HOME / ".local/share/themes" / WM_THEME / "xfwm4"
+    out.mkdir(parents=True, exist_ok=True)
+    for f in XFWM_BASE.iterdir():
+        link = out / f.name
+        if f.name != "themerc" and not (link.is_symlink() and link.resolve() == f):
+            link.unlink(missing_ok=True)
+            link.symlink_to(f)
+    rc = [l for l in (XFWM_BASE / "themerc").read_text().splitlines() if not l.startswith("shadow_")]
+    write_atomic(out / "themerc", "\n".join(rc + [f"{k}={v}" for k, v in WM_SHADOW.items()]) + "\n")
+
+
+SHOTS = HOME / "Pictures" / "Screenshots"
+
+
+def screenshot_cmd(flag):
+    """Save without asking: given a folder, xfce4-screenshooter still opens its Save dialog; given a
+    file name it just saves. Shortcuts don't run through a shell, so sh -c makes the timestamp."""
+    return f"sh -c 'xfce4-screenshooter {flag} -s \"{SHOTS}/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png\"'"
+
+
+COMMAND_KEYS = (("<Super>w", f"{RICE / 'chiron-rice'} pick"), ("<Super><Shift>w", f"{RICE / 'chiron-rice'} random"),
+                ("<Super>Return", "xfce4-terminal"), ("<Super>d", "rofi -show drun"), ("<Super>e", "thunar"),
+                ("<Super>l", "xflock4"), ("Print", screenshot_cmd("-f")), ("<Shift>Print", screenshot_cmd("-r")),
+                ("<Super>q", "wmctrl -c :ACTIVE:"),  # a command: xfwm4's close keeps Alt+F4 (one key per action)
+                ("<Alt>F1", "xfce4-popup-whiskermenu"))  # what a tap of Super sends (xcape)
+# xfwm4 keeps one key per action, so these replace Mint's Ctrl+Alt+D, Super+keypad ←/→, Alt+F10, Alt+F9
+WM_KEYS = (("<Super>m", "show_desktop_key"),  # again: the windows come back
+           ("<Super>Left", "tile_left_key"), ("<Super>Right", "tile_right_key"),
+           ("<Super>Up", "maximize_window_key"),  # again: back to its old size
+           ("<Super>Down", "hide_window_key"))
+# Mint opens the menu with a bare Super_L binding. xfsettingsd then grabs the whole keyboard while Super
+# is held, so no Super+key reaches xfwm4 (Super+M, Super+Tab, tiling: all dead). xcape turns a tap of
+# Super into Alt+F1 instead, and Super combos reach the window manager again.
+XCAPE = 'xcape -e "Super_L=Alt_L|F1"'
+
+
+def wm_key_conflicts(listing):
+    """xfconf paths to remove (from `xfconf-query -lv`): other keys bound to the xfwm4 actions WM_KEYS
+    sets, and xfwm4 bindings of keys that are commands here (the command would never run)."""
+    ours, commands = dict(WM_KEYS), dict(COMMAND_KEYS)
+    out = []
+    for line in listing.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0].startswith("/xfwm4/custom/"):
+            key, action = parts[0][len("/xfwm4/custom/"):], parts[1].strip()
+            if (action in ours.values() and ours.get(key) != action) or key in commands:
+                out.append(parts[0])
+    return out
+
+
 def install_user():
     layout = load_layout()
     # Look and feel
@@ -954,7 +1066,8 @@ def install_user():
                       ("/Gtk/CursorThemeName", "Bibata-Modern-Classic"), ("/Gtk/FontName", "Noto Sans 10"),
                       ("/Gtk/MonospaceFontName", "JetBrainsMono Nerd Font 10")):
         xfconf("xsettings", prop, val)
-    xfconf("xfwm4", "/general/theme", "Default")
+    wm_theme()
+    xfconf("xfwm4", "/general/theme", WM_THEME)
     xfconf("xfwm4", "/general/show_frame_shadow", True, "bool")
     xfconf("xfwm4", "/general/frame_opacity", 100, "int")
     xfconf("xfce4-terminal", "/font-name", "JetBrainsMono Nerd Font 11")
@@ -962,10 +1075,27 @@ def install_user():
     xfconf("xfce4-desktop", "/desktop-icons/style", 0, "int")  # clean desktop, like the reference look
     xfconf_array("xfwm4", "/general/workspace_names", ["1", "2", "3", "4"], "string")
     # Keyboard shortcuts
-    me = str(RICE / "chiron-rice")
-    for key, cmd in (("<Super>w", f"{me} pick"), ("<Super><Shift>w", f"{me} random"),
-                     ("<Super>Return", "xfce4-terminal"), ("<Super>d", "rofi -show drun")):
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    for key, cmd in COMMAND_KEYS:
         xfconf("xfce4-keyboard-shortcuts", f"/commands/custom/{key}", cmd)
+    rc, listing = sh("xfconf-query", "-c", "xfce4-keyboard-shortcuts", "-lv")
+    for path in wm_key_conflicts(listing if rc == 0 else ""):
+        sh("xfconf-query", "-c", "xfce4-keyboard-shortcuts", "-p", path, "-r")
+    for key, action in WM_KEYS:
+        xfconf("xfce4-keyboard-shortcuts", f"/xfwm4/custom/{key}", action)
+    if shutil.which("xcape"):  # tap Super = menu, without breaking Super combos (see XCAPE)
+        sh("xfconf-query", "-c", "xfce4-keyboard-shortcuts", "-p", "/commands/custom/Super_L", "-r")
+        sh("pkill", "-x", "xcape")
+        subprocess.Popen(["sh", "-c", XCAPE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    # A key xfwm4 held when xfsettingsd tried to grab it stays dead until xfsettingsd grabs again
+    subprocess.Popen(["xfsettingsd", "--replace"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    # Lock after 10 minutes idle, on suspend and on closing the lid (light-locker, which xflock4 uses).
+    # The stick logs in by itself after the LUKS passphrase, so the lock is what guards it when left alone.
+    for prop, val, kind in (("dpms-enabled", True, "bool"), ("blank-on-ac", 10, "int"),
+                            ("blank-on-battery", 10, "int"), ("lock-screen-suspend-hibernate", True, "bool")):
+        xfconf("xfce4-power-manager", f"/xfce4-power-manager/{prop}", val, kind)
+    for key in ("lock-on-suspend", "lock-on-lid"):
+        sh("gsettings", "set", "apps.light-locker", key, "true")
     # Panels: rebuild from panel-layout.json
     sh("xfce4-panel", "--quit")
     sh("xfconf-query", "-c", "xfce4-panel", "-p", "/", "-R", "-r")
@@ -1049,6 +1179,9 @@ def install_user():
     (auto / "chiron-rice.desktop").write_text(
         "[Desktop Entry]\nType=Application\nName=Chiron desktop theme\nExec=/opt/chiron/rice/chiron-rice login\n"
         "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n")
+    (auto / "chiron-xcape.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Chiron: tap Super for the menu\n"
+        f"Exec={XCAPE}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n")
     units = HOME / ".config/systemd/user"
     units.mkdir(parents=True, exist_ok=True)
     (units / "chiron-rice-rotate.service").write_text(

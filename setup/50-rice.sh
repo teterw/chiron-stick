@@ -26,11 +26,11 @@ NERDFONT_SHA=04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf
 WALLUST_VERSION=3.5.1
 
 if [ "$DRY_RUN" = 1 ]; then
-  echo "[dry-run] apt: rofi conky-all fonts-jetbrains-mono xdotool xfce4-windowck-plugin xfce4-genmon-plugin git papirus-icon-theme"
+  echo "[dry-run] apt: rofi conky-all fonts-jetbrains-mono xdotool xcape wmctrl xfce4-windowck-plugin xfce4-genmon-plugin git papirus-icon-theme"
   echo "[dry-run] build the missing Papirus icon caches"
   echo "[dry-run] verified downloads: adw-gtk3 v6.5, fastfetch 2.69.0, starship 1.26.0, JetBrainsMono Nerd Font 3.5.1"
   echo "[dry-run] build wallust $WALLUST_VERSION from crates.io (--locked), then remove the Rust toolchain"
-  echo "[dry-run] install rice to /opt/chiron/rice; GRUB theme, Plymouth splash, login screen; snapshot 'riced'"
+  echo "[dry-run] install rice to /opt/chiron/rice; GRUB theme, Plymouth splash, login screen, auto-login; snapshot 'riced'"
   exit 0
 fi
 
@@ -43,7 +43,7 @@ fetch() {  # fetch <url> <sha256> <file>: download and verify, or stop
 }
 
 echo "===== 1. Packages"
-"${APT[@]}" install rofi conky-all fonts-jetbrains-mono xdotool xfce4-windowck-plugin xfce4-genmon-plugin git x11-xserver-utils \
+"${APT[@]}" install rofi conky-all fonts-jetbrains-mono xdotool xcape wmctrl xfce4-windowck-plugin xfce4-genmon-plugin git x11-xserver-utils \
   papirus-icon-theme gtk-update-icon-cache
 # Mint's Papirus has no icon caches: its postinst skips them when gtk-update-icon-cache isn't there yet.
 # Without a cache every GTK program indexes ~500 icon folders on its own, ~55 MB more RAM each
@@ -155,6 +155,14 @@ cursor-theme-name=Bibata-Modern-Classic
 font-name=Noto Sans 11
 show-hostname=true
 EOF
+# Log the desktop user straight in: the LUKS passphrase at boot already guards the stick, so a second
+# password at the login screen adds nothing. sudo and the lock screen (light-locker, after 10 minutes
+# idle; set up by 51-rice-user.sh) still ask for the password.
+DESKTOP_USER=${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}
+[ -n "$DESKTOP_USER" ] && [ "$DESKTOP_USER" != root ] || die "can't tell who the desktop user is (run with sudo as them)"
+printf '# Chiron Stick (setup/50-rice.sh): one password, the LUKS one at boot\n[Seat:*]\nautologin-user=%s\nautologin-user-timeout=0\nautologin-session=xfce\n' \
+  "$DESKTOP_USER" > /etc/lightdm/lightdm.conf.d/80-chiron-autologin.conf
+echo "auto-login: $DESKTOP_USER"
 
 echo "===== 6. Snapshot riced (system only: Timeshift leaves @home out, where the user part goes)"
 if timeshift --list --scripted 2>/dev/null | grep -qw riced; then echo "snapshot 'riced' already exists"

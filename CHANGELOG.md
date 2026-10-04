@@ -4,6 +4,15 @@ All notable changes to Chiron Stick are listed here.
 
 ## [Unreleased]
 
+### Added
+- **One password:** after the disk passphrase at boot, the desktop opens by itself (LightDM auto-login, `setup/50-rice.sh`). The screen locks after 10 minutes idle, on suspend and when the lid closes; `Super+L` locks it right away
+- **See-through terminal** like GNOME's Ptyxis: 85% opaque with desktop effects on. Bright wallpapers showing through can't make text hard to read: the terminal's colours are lightened until they keep the theme's contrast (7:1 text, 4.5:1 colours), and only if that can't work does the terminal get less see-through
+- **Soft window shadows**, GNOME-like: a small `Chiron-wm` window theme (Mint's Default with bigger shadows; xfwm4 only takes shadow sizes from a theme)
+- Keys: `Super+M` minimise all windows (again: bring them back), `Super+←/→` half the screen, `Super+↑` maximise, `Super+↓` minimise, `Super+Q` close, `Super+L` lock, `Print` / `Shift+Print` screenshot of the screen / an area straight to `~/Pictures/Screenshots`. They replace Mint's `Ctrl+Alt+D`, `Super+keypad ←/→`, `Alt+F10` and `Alt+F9` (xfwm4 keeps one key per action); `Alt+F4` still closes
+
+### Fixed
+- No `Super+key` window shortcut ever worked (Mint's `Super+Tab` and `Super+keypad` tiling included): Mint opens the menu with a bare `Super` binding, which grabs the keyboard while Super is held. A tap of Super now goes through `xcape` (it sends `Alt+F1`, which opens the menu), so tapping Super still opens the menu
+
 ## [0.7.0] - 2026-10-04
 
 ### Added
