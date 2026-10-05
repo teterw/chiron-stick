@@ -86,6 +86,15 @@ def print_summary(report, folder):
     print(f"\nReport: {folder}/report.html\nOwner summary (Thai + English, printable): {folder}/owner-summary.html")
 
 
+def unique_folder(folder):
+    """folder, or folder-2, -3, …: two checks in the same minute keep both reports."""
+    n, out = 1, folder
+    while out.exists():
+        n += 1
+        out = folder.with_name(f"{folder.name}-{n}")
+    return out
+
+
 def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=True, ram=True, ev=None):
     """ev: an Events stream (chiron --events, for the doctor launcher) instead of text."""
     from chiron import checks
@@ -95,7 +104,7 @@ def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=Tr
     root = reports_root()
     ident = identity()
     now = datetime.datetime.now().astimezone()
-    folder = root / f"{now:%Y-%m-%d_%H%M}_{_slug(ident.get('sys_vendor'))}-{_slug(ident.get('product_name'))}"
+    folder = unique_folder(root / f"{now:%Y-%m-%d_%H%M}_{_slug(ident.get('sys_vendor'))}-{_slug(ident.get('product_name'))}")
     ctx = Context(raw_dir=folder / "raw", quick=quick, own=own_disks())
     modules = checks.MODULES if with_report else ["system"]
     planned = [{"id": m, "title": TITLES[m]} for m in modules]

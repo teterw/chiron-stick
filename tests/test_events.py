@@ -77,5 +77,21 @@ class Stopping(unittest.TestCase):
         f.close()
 
 
+class ReportFolder(unittest.TestCase):
+    def test_two_checks_in_one_minute_keep_both(self):
+        """The doctor makes quick reruns easy: a second report in the same minute must not
+        overwrite the first one."""
+        import tempfile
+        from pathlib import Path
+        from chiron.cli import unique_folder
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "2026-10-05_1308_Acer-Aspire"
+            self.assertEqual(unique_folder(f), f)
+            f.mkdir()
+            self.assertEqual(unique_folder(f).name, "2026-10-05_1308_Acer-Aspire-2")
+            (Path(tmp) / "2026-10-05_1308_Acer-Aspire-2").mkdir()
+            self.assertEqual(unique_folder(f).name, "2026-10-05_1308_Acer-Aspire-3")
+
+
 if __name__ == "__main__":
     unittest.main()
