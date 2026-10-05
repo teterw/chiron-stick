@@ -103,7 +103,7 @@ class Doctor(Gtk.Window):
 
     def note(self, msg, status):
         """A line in the log panel, outside a run (cancelled, errors)."""
-        self.run.say(time.monotonic(), f"{'note':<15}{msg}", status)
+        self.run.say(time.monotonic(), f"{'Note':<15}{msg[:1].upper()}{msg[1:]}", status)
 
     def stop(self):
         if self.demo_iter is not None:

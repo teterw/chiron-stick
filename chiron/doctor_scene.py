@@ -1,17 +1,20 @@
-"""Chiron Doctor's picture: the star chart in a terminal / HUD style (Tete, 2026-10-05: "I still want
-the star chart but in a style of terminal and techy look", with smooth, unhurried animation).
+"""Chiron Doctor's picture: the star chart, styled like professional instrument software (Tete,
+2026-10-05: the star chart in a terminal / techy style, with smooth, unhurried animation, and then
+"too cartoonish, I want it to look professional").
 
-Every check is a node on a wide ellipse. A beam travels along the link to the next node, the node
-scans (a rotating reticle), then locks onto its result: the node lights up green, amber or red with a
-glitch flash and its label types out, like a line of a boot log. A log panel types each event; the
-centre is a terminal menu, then a segmented progress ring, then the diagnosis.
+Restraint is the style: a calm near-black surface tinted by the person's wallpaper, hairline links,
+small flat nodes, a sans for words and a monospace for data, uppercase captions, status chips
+(OK / WARN / FAIL) instead of glows, and motion that eases and fades instead of flashing. Every
+check is a node on a wide ellipse; a light travels along the link to the next node, a thin arc spins
+while it is checked, then the node takes its status colour and its finding fades in. A command
+palette starts a run; a segmented ring shows progress and then the diagnosis; an activity log
+records every event.
 
 Only cairo and Pango: the window (doctor_window.py) and tools/doctor-frames.py both draw through
-Scene.render(). Verdict colours are fixed (CLAUDE.md decision 10); the theme's accent does the rest."""
+Scene.render(). Verdict colours are fixed (CLAUDE.md decision 10)."""
 import colorsys
 import datetime
 import math
-import random
 import time
 
 import cairo
@@ -20,24 +23,30 @@ import gi
 gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
 from gi.repository import Pango, PangoCairo  # noqa: E402
-from PIL import Image, ImageDraw, ImageFilter, ImageOps  # noqa: E402
+from PIL import Image, ImageFilter, ImageOps  # noqa: E402
 
 from chiron import doctor_model as dm  # noqa: E402
 from chiron.checks import MODULES, TITLES  # noqa: E402
 
+SANS = "Noto Sans, Inter, Cantarell, sans-serif"
 MONO = "JetBrainsMono Nerd Font, JetBrains Mono, DejaVu Sans Mono, monospace"
-BG = (0.030, 0.028, 0.055)
-FG = (0.86, 0.88, 0.94)
-DIM = (0.45, 0.46, 0.57)
-FAINT = (0.22, 0.22, 0.31)
-VERDICT = {"green": (0.20, 0.83, 0.45), "yellow": (0.98, 0.70, 0.14), "red": (0.97, 0.31, 0.31)}  # fixed
-TAG = {"green": "[ OK ]", "yellow": "[WARN]", "red": "[FAIL]", "info": "[INFO]", "na": "[ -- ]",
-       "run": "[ .. ]", "wait": "[    ]"}
-WORDS = {"green": "ALL GOOD", "yellow": "WORTH A LOOK", "red": "PROBLEM FOUND"}
-MENU = [("health check", "~3 min", ["report"]), ("quick check", "~1 min", ["report", "--quick"]),
-        ("stress test", "10 min", ["stress"]), ("check + stress", "~13 min", ["full"])]
+BG = (0.043, 0.047, 0.059)
+PANEL = (0.066, 0.071, 0.086)
+FG = (0.90, 0.91, 0.93)
+SUB = (0.60, 0.62, 0.67)
+FAINT = (0.34, 0.36, 0.41)
+HAIR = (1.0, 1.0, 1.0)  # hairlines: white at low alpha
+VERDICT = {"green": (0.25, 0.79, 0.48), "yellow": (0.95, 0.69, 0.22), "red": (0.93, 0.36, 0.36)}  # fixed
+INFO = (0.62, 0.66, 0.75)
+CHIP = {"green": "OK", "yellow": "WARN", "red": "FAIL", "info": "INFO", "na": "N/A", "run": "RUN"}
+WORDS = {"green": "All good", "yellow": "Worth a look", "red": "Problem found"}
+MENU = [("Health check", "~3 min", ["report"], "Every check, read-only"),
+        ("Quick check", "~1 min", ["report", "--quick"], "Skips the disk speed test"),
+        ("Stress test", "10 min", ["stress"], "CPU, RAM and graphics under full load"),
+        ("Check + stress", "~13 min", ["full"], "Everything, one combined verdict")]
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAU = 2 * math.pi
+SCAN_CYAN = (0.38, 0.78, 0.95)
 
 
 def clamp(v, lo=0.0, hi=1.0):
@@ -53,16 +62,12 @@ def ease_in_out(t):
     return 4 * t ** 3 if t < 0.5 else 1 - (-2 * t + 2) ** 3 / 2
 
 
-def typed(s, since, now, cps=60):
-    """The part of s typed so far (since: when typing began), and whether it's all there."""
-    if since is None:
-        return s, True
-    n = int(max(0.0, now - since) * cps)
-    return s[:n], n >= len(s)
-
-
-def cursor_on(now):
-    return (now % 1.06) < 0.62
+def scan_colour(accent):
+    """The colour of whatever is being checked (the travelling light, the spinning arc, the running
+    segment): the theme's accent, unless it could be mistaken for green, amber or red."""
+    h, _l, sat = colorsys.rgb_to_hls(*accent)
+    near = min(min(abs(h - v), 1 - abs(h - v)) for v in (0.0, 0.11, 0.39))  # red, amber, green hues
+    return accent if near >= 0.1 and sat >= 0.2 else SCAN_CYAN
 
 
 def status_of(st):
@@ -74,19 +79,8 @@ def status_of(st):
     return st.status
 
 
-SCAN_CYAN = (0.35, 0.85, 1.0)
-
-
-def scan_colour(accent):
-    """The colour of everything that scans (beam, reticle, links, the running segment): the theme's
-    accent unless it could be mistaken for green, amber or red, then a cool cyan."""
-    h, l, sat = colorsys.rgb_to_hls(*accent)
-    near = min(min(abs(h - v), 1 - abs(h - v)) for v in (0.0, 0.11, 0.39))  # red, amber, green hues
-    return accent if near >= 0.1 and sat >= 0.2 else SCAN_CYAN
-
-
-def colour(status, accent):
-    return VERDICT.get(status) or {"run": accent, "info": (0.78, 0.80, 0.90), "na": DIM}.get(status, FAINT)
+def colour(status, scan):
+    return VERDICT.get(status) or {"run": scan, "info": INFO, "na": FAINT}.get(status, FAINT)
 
 
 def surface(im):
@@ -96,37 +90,17 @@ def surface(im):
 
 
 def backdrop(wall, w, h):
-    """Terminal black with the person's wallpaper faintly under it, a fine grid, scanlines and a
-    vignette. Drawn once per window size."""
+    """A calm near-black surface, faintly tinted by the person's wallpaper."""
     base = Image.new("RGB", (w, h), tuple(int(c * 255) for c in BG))
     if wall:
         try:
             with Image.open(wall) as src:
-                src.draft("RGB", (w // 4, h // 4))
-                im = ImageOps.fit(src.convert("RGB"), (max(64, w // 8), max(36, h // 8)), Image.BILINEAR)
-            im = im.filter(ImageFilter.GaussianBlur(2.5)).resize((w, h), Image.BILINEAR)
-            base = Image.blend(base, im, 0.16)
+                src.draft("RGB", (w // 8, h // 8))
+                im = ImageOps.fit(src.convert("RGB"), (max(32, w // 16), max(18, h // 16)), Image.BILINEAR)
+            im = im.filter(ImageFilter.GaussianBlur(3)).resize((w, h), Image.BILINEAR)
+            base = Image.blend(base, im, 0.07)
         except OSError:
             pass
-    over = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(over)
-    step = max(24, int(48 * min(w / 1280, h / 800)))
-    for x in range(0, w, step):
-        d.line([(x, 0), (x, h)], fill=(140, 150, 200, 9))
-    for y in range(0, h, step):
-        d.line([(0, y), (w, y)], fill=(140, 150, 200, 9))
-    for y in range(0, h, 3):
-        d.line([(0, y), (w, y)], fill=(0, 0, 0, 34))
-    base = base.convert("RGBA")
-    base.alpha_composite(over)
-    # vignette: darker towards the edges
-    vg = Image.radial_gradient("L").resize((w, h)).point(lambda v: int(clamp((v - 120) / 135) * 150))
-    base = Image.composite(Image.new("RGBA", (w, h), (0, 0, 0, 255)), base, vg)
-    rng = random.Random(3)
-    d = ImageDraw.Draw(base)
-    for _ in range(int(w * h / 9000)):  # a few faint stars: it's still a star chart
-        x, y, m = rng.random() * w, rng.random() * h, rng.random() ** 4
-        d.point((x, y), fill=(200, 200, 240, int(40 + 120 * m)))
     return surface(base)
 
 
@@ -139,19 +113,27 @@ class Scene:
         self.menu_sel = 0
         self.hover = None
         self.detail = None        # node id whose findings are shown
-        self.shown = 0.0          # progress ring, eased
+        self.shown = 0.0          # progress, eased
         self.last_now = None
-        self._layouts = {}
+        self.last_seen = None
 
-    # ------------------------------------------------ text
+    # ------------------------------------------------ drawing helpers
 
-    def text(self, cr, s, x, y, size, color, alpha=1.0, bold=False, align="left", width=None):
+    def layout(self, cr, s, size, font=SANS, weight="", spacing=0.0, width=None):
         layout = PangoCairo.create_layout(cr)
-        layout.set_font_description(Pango.FontDescription(f"{MONO} {'Bold' if bold else ''} {size:.1f}px"))
+        layout.set_font_description(Pango.FontDescription(f"{font} {weight} {size:.1f}px"))
+        if spacing:
+            attrs = Pango.AttrList()
+            attrs.insert(Pango.attr_letter_spacing_new(int(spacing * Pango.SCALE)))
+            layout.set_attributes(attrs)
         layout.set_text(s, -1)
         if width:
             layout.set_width(int(max(1, width) * Pango.SCALE))
             layout.set_ellipsize(Pango.EllipsizeMode.END)
+        return layout
+
+    def text(self, cr, s, x, y, size, color, alpha=1.0, font=SANS, weight="", align="left", width=None, spacing=0.0):
+        layout = self.layout(cr, s, size, font, weight, spacing, width)
         w, h = layout.get_pixel_size()
         if align == "center":
             x -= w / 2
@@ -163,14 +145,46 @@ class Scene:
         cr.new_path()
         return w, h
 
-    def glitch(self, cr, s, x, y, size, color, p, bold=True, align="left"):
-        """A short chromatic glitch (p: 0..1 through it) under the real text."""
-        if p < 1:
-            j = (1 - p) * 3.5
-            off = math.sin(p * 37) * j
-            self.text(cr, s, x + off + j, y, size, (1.0, 0.2, 0.35), 0.55 * (1 - p), bold, align)
-            self.text(cr, s, x - off - j, y, size, (0.2, 0.9, 1.0), 0.55 * (1 - p), bold, align)
-        self.text(cr, s, x, y, size, color, 1.0, bold, align)
+    def caption(self, cr, s, x, y, scale, color=SUB, alpha=1.0, align="left"):
+        """Small uppercase label with tracking: section titles."""
+        return self.text(cr, s.upper(), x, y, 10.5 * scale, color, alpha, weight="Semi-Bold", align=align, spacing=1.2 * scale)
+
+    def hline(self, cr, x0, x1, y, a=0.08, width=1.0):
+        cr.set_source_rgba(*HAIR, a)
+        cr.set_line_width(width)
+        cr.move_to(x0, round(y) + 0.5)
+        cr.line_to(x1, round(y) + 0.5)
+        cr.stroke()
+
+    def box(self, cr, x, y, w, h, fill=PANEL, fill_a=0.92, line_a=0.08, r=6):
+        r = min(r, w / 2, h / 2)
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+        cr.set_source_rgba(*fill, fill_a)
+        cr.fill_preserve()
+        cr.set_source_rgba(*HAIR, line_a)
+        cr.set_line_width(1)
+        cr.stroke()
+
+    def chip_width(self, cr, status, s):
+        return 10 * s + self.layout(cr, CHIP.get(status, ""), 10.5 * s, MONO, "Bold").get_pixel_size()[0]
+
+    def chip(self, cr, status, x, y, scale, align="left", alpha=1.0):
+        """A coloured dot and a status word: ● OK / ● WARN / ● FAIL."""
+        col = colour(status, self.scan)
+        word = CHIP.get(status, "")
+        total = self.chip_width(cr, status, scale)
+        x0 = x - (total if align == "right" else total / 2 if align == "center" else 0)
+        cr.set_source_rgba(*col, alpha)
+        cr.new_path()
+        cr.arc(x0 + 3.5 * scale, y + 7.5 * scale, 3 * scale, 0, TAU)
+        cr.fill()
+        self.text(cr, word, x0 + 10 * scale, y + 0.5 * scale, 10.5 * scale, col, alpha, font=MONO, weight="Bold")
+        return total
 
     # ------------------------------------------------ main
 
@@ -183,87 +197,54 @@ class Scene:
         cr.set_source_surface(self.bg, 0, 0)
         cr.paint()
         self.hits = []
-        self.shown += (run.progress() - self.shown) * clamp(dt * 4)
-        pad = 26 * s
-        log_top = H - 158 * s
-        top, bottom = 96 * s, log_top - 14 * s
-        self.header(cr, W, s, now, run, pad, waiting)
-        self.frame(cr, W, s, now, run, pad, top, bottom)
+        gap = 0.0 if self.last_seen is None else max(0.0, now - self.last_seen)  # any gap, also long ones
+        self.last_seen = now
+        self.shown += (run.progress() - self.shown) * clamp(gap * 3)
+        pad = 28 * s
+        head = 70 * s
+        log_top = H - 172 * s
+        self.header(cr, W, s, now, run, pad, head)
+        top, bottom = head + 18 * s, log_top - 18 * s
         cx, cy = W / 2, (top + bottom) / 2
-        room = 50 * s
-        ry = (bottom - top) / 2 - room
-        rx = min(W * 0.34, ry * 2.0, W / 2 - pad - 250 * s)
+        ry = (bottom - top) / 2 - 44 * s
+        rx = min(W * 0.33, ry * 2.0, W / 2 - pad - 250 * s)
         self.chart(cr, W, s, now, run, cx, cy, rx, ry)
         if run.phase == "idle":
-            self.menu(cr, s, now, cx, cy, waiting)
+            self.palette(cr, s, now, cx, cy, waiting)
         elif run.phase == "running":
             self.progress(cr, s, now, run, cx, cy)
         else:
             self.diagnosis(cr, s, now, run, cx, cy)
-        self.log(cr, W, H, s, now, run, pad, log_top, waiting)
+        self.activity(cr, W, H, s, now, run, pad, log_top, waiting)
         if self.detail:
-            self.details(cr, W, s, run, cx, cy)
+            self.details(cr, W, H, s, run, cx, cy)
 
-    # ------------------------------------------------ header and frame
+    # ------------------------------------------------ header
 
-    def header(self, cr, W, s, now, run, pad, waiting):
+    def header(self, cr, W, s, now, run, pad, head):
         y = 20 * s
-        x = pad
-        w, _ = self.text(cr, f"{self.user}@chiron", x, y, 17 * s, self.accent, bold=True)
-        x += w
-        w, _ = self.text(cr, ":~$ ", x, y, 17 * s, FG)
-        x += w
-        cmd = "chiron doctor"
-        if run.phase == "running" or waiting:
-            cmd = "chiron doctor --run"
-        w, h = self.text(cr, cmd, x, y, 17 * s, FG)
-        if cursor_on(now):
-            cr.set_source_rgba(*self.accent, 0.9)
-            cr.rectangle(x + w + 4 * s, y + 3 * s, 9 * s, h - 6 * s)
-            cr.fill()
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.text(cr, f"// pc doctor · {stamp}", pad, y + 28 * s, 12 * s, DIM)
-        name = " ".join(v for v in (self.machine.get("sys_vendor"), self.machine.get("product_name")) if v) or "this computer"
-        self.text(cr, "TARGET", W - pad, y + 1 * s, 11 * s, DIM, align="right")
-        self.text(cr, name.upper(), W - pad, y + 15 * s, 15 * s, FG, bold=True, align="right", width=560 * s)
-        self.text(cr, self.spec, W - pad, y + 36 * s, 12 * s, DIM, align="right")
-        # rule with a scanner light running along it
-        ly = 78 * s
-        cr.set_source_rgba(*FAINT, 1)
-        cr.set_line_width(1 * s)
-        cr.move_to(pad, ly)
-        cr.line_to(W - pad, ly)
-        cr.stroke()
-        for tx in range(int(pad), int(W - pad), int(40 * s)):
-            cr.move_to(tx, ly)
-            cr.line_to(tx, ly + 4 * s)
-        cr.stroke()
-        p = (now % 6.0) / 6.0
-        hx = pad + (W - 2 * pad) * p
-        g = cairo.LinearGradient(hx - 90 * s, 0, hx, 0)
-        g.add_color_stop_rgba(0, *self.accent, 0)
-        g.add_color_stop_rgba(1, *self.accent, 0.9)
-        cr.set_source(g)
-        cr.set_line_width(1.6 * s)
-        cr.move_to(max(pad, hx - 90 * s), ly)
-        cr.line_to(hx, ly)
-        cr.stroke()
-
-    def frame(self, cr, W, s, now, run, pad, top, bottom):
-        L = 18 * s
-        cr.set_source_rgba(*self.accent, 0.55)
-        cr.set_line_width(2 * s)
-        for (x, y, dx, dy) in ((pad, top, 1, 1), (W - pad, top, -1, 1), (pad, bottom, 1, -1), (W - pad, bottom, -1, -1)):
-            cr.move_to(x + dx * L, y)
-            cr.line_to(x, y)
-            cr.line_to(x, y + dy * L)
-        cr.stroke()
-        n = len(run.stars) or len(MODULES)
-        el = (run.ended_at or now) - run.started_at if run.started_at else 0
-        self.text(cr, "RA 05h 35m 17s", pad + 8 * s, top + 8 * s, 10.5 * s, DIM)
-        self.text(cr, "DEC −05° 23′ 28″", W - pad - 8 * s, top + 8 * s, 10.5 * s, DIM, align="right")
-        self.text(cr, f"NODES {n:02d}", pad + 8 * s, bottom - 22 * s, 10.5 * s, DIM)
-        self.text(cr, f"T+{int(el) // 60:02d}:{int(el) % 60:02d}", W - pad - 8 * s, bottom - 22 * s, 10.5 * s, DIM, align="right")
+        w, _ = self.text(cr, "CHIRON", pad, y, 15 * s, FG, weight="Bold", spacing=2.2 * s)
+        self.text(cr, "Diagnostics", pad + w + 12 * s, y + 0.5 * s, 15 * s, SUB)
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+        self.text(cr, f"{self.user}@chiron  ·  {stamp}", pad, y + 24 * s, 11.5 * s, FAINT, font=MONO)
+        name = " ".join(v for v in (self.machine.get("sys_vendor"), self.machine.get("product_name")) if v) or "This computer"
+        self.text(cr, name, W - pad, y, 14 * s, FG, weight="Medium", align="right", width=560 * s)
+        self.text(cr, self.spec, W - pad, y + 23 * s, 11.5 * s, SUB, font=MONO, align="right")
+        self.hline(cr, pad, W - pad, head)
+        if run.phase == "running":
+            el = int(now - (run.started_at or now))
+            msg, col = f"Running  ·  {el // 60:d}:{el % 60:02d}", self.scan
+        elif run.phase in ("done", "stopped", "failed") and run.started_at:
+            el = int((run.ended_at or now) - run.started_at)
+            msg, col = f"{'Complete' if run.phase == 'done' else run.phase.title()}  ·  {el // 60:d}:{el % 60:02d}", SUB
+        else:
+            msg, col = "Ready", SUB
+        mw = self.layout(cr, msg.upper(), 10.5 * s, SANS, "Semi-Bold", 1.2 * s).get_pixel_size()[0]
+        cr.set_source_rgba(*col, 1)
+        cr.new_path()
+        cr.arc(W / 2 - mw / 2 - 10 * s, y + 13.5 * s, 3 * s, 0, TAU)
+        cr.fill()
+        self.caption(cr, msg, W / 2, y + 6 * s, s, col, align="center")
 
     # ------------------------------------------------ the chart
 
@@ -278,38 +259,21 @@ class Scene:
         pts = []
         for i in range(n):
             a = -math.pi / 2 + i * TAU / n
-            k = 1.0 if i % 2 == 0 else 0.92
+            k = 1.0 if i % 2 == 0 else 0.93
             pts.append((cx + rx * k * math.cos(a), cy + ry * k * math.sin(a), a))
-        reached = [st.status != "wait" for st in stars]
-        lit = [status_of(st) not in ("wait", "run") for st in stars]
-        # links: dashed where the beam hasn't been yet, solid behind it, data pulses on finished ones
+        # hairline links; the path the light has travelled is a little brighter
+        cr.set_line_width(1 * s)
         for i in range(n):
             j = (i + 1) % n
             (x1, y1, _), (x2, y2, _) = pts[i], pts[j]
-            if reached[i] and reached[j] and (j != 0 or run.phase in ("done",)):
-                beam_p = 1.0
-                if stars[j].status == "run" and stars[j].started_at is not None:
-                    beam_p = ease_in_out((now - stars[j].started_at) / dm.Pacer.BEAM)
-                if beam_p < 1.0:
-                    continue  # drawn as the travelling beam below
-                cr.set_source_rgba(*self.scan, 0.45)
-                cr.set_line_width(1.6 * s)
-                cr.move_to(x1, y1)
-                cr.line_to(x2, y2)
-                cr.stroke()
-                if lit[i] and lit[j]:
-                    p = (now * 0.35 + i * 0.37) % 1.0
-                    px, py = x1 + (x2 - x1) * p, y1 + (y2 - y1) * p
-                    self.dot(cr, px, py, 2.2 * s, self.scan, 0.8)
-            else:
-                cr.set_source_rgba(*FAINT, 0.9)
-                cr.set_line_width(1 * s)
-                cr.set_dash([2 * s, 6 * s])
-                cr.move_to(x1, y1)
-                cr.line_to(x2, y2)
-                cr.stroke()
-                cr.set_dash([])
-        # the beam to the node being checked
+            travelled = stars[i].status != "wait" and stars[j].status != "wait" and (j != 0 or run.phase == "done")
+            if travelled and stars[j].status == "run" and stars[j].started_at is not None \
+                    and now - stars[j].started_at < dm.Pacer.BEAM:
+                travelled = False  # the light is still on its way: drawn below
+            cr.set_source_rgba(*(self.scan if travelled else HAIR), 0.32 if travelled else 0.07)
+            cr.move_to(x1, y1)
+            cr.line_to(x2, y2)
+            cr.stroke()
         cur = next((i for i, st in enumerate(stars) if st.status == "run"), None)
         if cur is not None and stars[cur].started_at is not None:
             p = ease_in_out((now - stars[cur].started_at) / dm.Pacer.BEAM)
@@ -318,300 +282,252 @@ class Scene:
                 tx, ty = pts[cur][0], pts[cur][1]
                 hx, hy = sx + (tx - sx) * p, sy + (ty - sy) * p
                 g = cairo.LinearGradient(sx, sy, hx, hy)
-                g.add_color_stop_rgba(0, *self.scan, 0.15)
-                g.add_color_stop_rgba(1, *self.scan, 1.0)
+                g.add_color_stop_rgba(0, *self.scan, 0.0)
+                g.add_color_stop_rgba(max(0.0, 1 - 60 * s / max(1.0, math.hypot(hx - sx, hy - sy))), *self.scan, 0.0)
+                g.add_color_stop_rgba(1, *self.scan, 0.9)
                 cr.set_source(g)
-                cr.set_line_width(2.2 * s)
+                cr.set_line_width(1.5 * s)
                 cr.move_to(sx, sy)
                 cr.line_to(hx, hy)
                 cr.stroke()
-                self.dot(cr, hx, hy, 3.5 * s, self.scan, 1.0, glow=5)
+                cr.set_source_rgba(*self.scan, 1)
+                cr.new_path()
+                cr.arc(hx, hy, 2.4 * s, 0, TAU)
+                cr.fill()
         for i, (st, (x, y, ang)) in enumerate(zip(stars, pts)):
-            self.node(cr, s, now, st, i, x, y)
+            self.node(cr, s, now, st, x, y)
             self.label(cr, W, s, now, st, i, x, y, ang, cx)
             if st.results:
-                self.hits.append((x - 24 * s, y - 24 * s, 48 * s, 48 * s, f"node:{st.id}"))
+                self.hits.append((x - 22 * s, y - 22 * s, 44 * s, 44 * s, f"node:{st.id}"))
 
-    def dot(self, cr, x, y, r, col, a, glow=3):
-        cr.new_path()
-        g = cairo.RadialGradient(x, y, 0, x, y, r * glow)
-        g.add_color_stop_rgba(0, *col, 0.6 * a)
-        g.add_color_stop_rgba(1, *col, 0)
-        cr.set_source(g)
-        cr.arc(x, y, r * glow, 0, TAU)
-        cr.fill()
-        cr.set_source_rgba(*col, a)
-        cr.arc(x, y, r, 0, TAU)
-        cr.fill()
-
-    def diamond(self, cr, x, y, r):
-        cr.new_path()
-        cr.move_to(x, y - r)
-        cr.line_to(x + r, y)
-        cr.line_to(x, y + r)
-        cr.line_to(x - r, y)
-        cr.close_path()
-
-    def node(self, cr, s, now, st, i, x, y):
+    def node(self, cr, s, now, st, x, y):
         status = status_of(st)
-        col = colour(status, self.scan)
-        if st.status == "wait":
-            cr.set_source_rgba(*FAINT, 1)
-            cr.set_line_width(1.2 * s)
-            cr.rectangle(x - 3.5 * s, y - 3.5 * s, 7 * s, 7 * s)
-            cr.stroke()
-            return
-        arrived = st.started_at is None or now - st.started_at >= dm.Pacer.BEAM
-        if st.status == "run" and not arrived:
-            cr.set_source_rgba(*self.scan, 0.5)
-            cr.set_line_width(1.4 * s)
-            self.diamond(cr, x, y, 6 * s)
-            cr.stroke()
-            return
-        scanning = st.status == "run" and st.revealed_at is None
-        lock = None if scanning else clamp((now - (st.revealed_at or st.finished_at or now)) / 0.45)
-        # reticle: rotates while scanning, closes in on the node as it locks
-        if scanning or (lock is not None and lock < 1):
-            rot = now * 1.8
-            rr = (17 + 2.5 * math.sin(now * 5)) * s if scanning else (17 - 9 * ease_out(lock)) * s
-            a = 0.95 if scanning else 0.95 * (1 - lock)
-            cr.set_source_rgba(*self.scan, a)
-            cr.set_line_width(1.8 * s)
-            for q in range(4):
-                ang = rot + q * TAU / 4
-                cr.new_path()
-                cr.arc(x, y, rr, ang - 0.32, ang + 0.32)
-                cr.stroke()
-            if scanning:
-                cr.set_line_width(1 * s)
-                cr.set_source_rgba(*self.scan, 0.45)
-                cr.set_dash([3 * s, 4 * s])
-                cr.new_path()
-                cr.arc(x, y, 25 * s, -now * 1.2, -now * 1.2 + TAU * 0.7)
-                cr.stroke()
-                cr.set_dash([])
-                # sweep line
-                sa = now * 3.2
-                g = cairo.RadialGradient(x, y, 0, x, y, 25 * s)
-                g.add_color_stop_rgba(0, *self.scan, 0.35)
-                g.add_color_stop_rgba(1, *self.scan, 0)
-                cr.set_source(g)
-                cr.move_to(x, y)
-                cr.arc(x, y, 25 * s, sa - 0.5, sa)
-                cr.close_path()
-                cr.fill()
-                pulse = 0.5 + 0.5 * math.sin(now * 6)
-                cr.set_source_rgba(*self.scan, 0.5 + 0.4 * pulse)
-                self.diamond(cr, x, y, 5 * s)
-                cr.fill()
-                return
-        # locked: a lit diamond in its verdict colour, a burst when it has just locked
-        since = now - (st.revealed_at or st.finished_at or now - 9)
-        if since < 1.0:
-            p = ease_out(since / 1.0)
-            cr.set_source_rgba(*col, 0.7 * (1 - p))
-            cr.set_line_width(2.5 * s * (1 - p) + 0.5)
+        if st.status == "wait" or (st.status == "run" and st.started_at is not None
+                                   and now - st.started_at < dm.Pacer.BEAM):
+            cr.set_source_rgba(*HAIR, 0.22 if st.status == "wait" else 0.4)
+            cr.set_line_width(1 * s)
             cr.new_path()
-            cr.arc(x, y, (9 + 34 * p) * s, 0, TAU)
+            cr.arc(x, y, 3.2 * s, 0, TAU)
             cr.stroke()
-        r = 8 * s * (1 + 0.35 * max(0.0, 1 - since / 0.35))
-        g = cairo.RadialGradient(x, y, 0, x, y, r * 3.4)
-        g.add_color_stop_rgba(0, *col, 0.55)
-        g.add_color_stop_rgba(1, *col, 0)
-        cr.set_source(g)
+            return
+        if st.status == "run" and st.revealed_at is None:
+            # being checked: a thin arc turning around a small ring
+            arrive = clamp((now - (st.started_at or now) - dm.Pacer.BEAM) / 0.3)
+            cr.set_source_rgba(*self.scan, 0.25 * arrive)
+            cr.set_line_width(1 * s)
+            cr.new_path()
+            cr.arc(x, y, 9 * s, 0, TAU)
+            cr.stroke()
+            a0 = now * 4.2
+            cr.set_source_rgba(*self.scan, 0.95 * arrive)
+            cr.set_line_width(1.6 * s)
+            cr.new_path()
+            cr.arc(x, y, 9 * s, a0, a0 + 1.6)
+            cr.stroke()
+            cr.set_source_rgba(*self.scan, 0.9)
+            cr.new_path()
+            cr.arc(x, y, 3 * s, 0, TAU)
+            cr.fill()
+            return
+        # checked: the node takes its status colour; a faint ring settles around it
+        col = colour(status, self.scan)
+        since = now - (st.revealed_at or st.finished_at or now - 9)
+        p = ease_out(since / 0.6)
+        if since < 0.9:
+            q = ease_out(since / 0.9)
+            cr.set_source_rgba(*col, 0.35 * (1 - q))
+            cr.set_line_width(1 * s)
+            cr.new_path()
+            cr.arc(x, y, (5 + 9 * q) * s, 0, TAU)
+            cr.stroke()
+        cr.set_source_rgba(*col, 0.16 * p)
         cr.new_path()
-        cr.arc(x, y, r * 3.4, 0, TAU)
+        cr.arc(x, y, 8 * s, 0, TAU)
         cr.fill()
-        cr.set_source_rgba(*col, 1)
-        self.diamond(cr, x, y, r)
+        cr.set_source_rgba(*col, 0.4 + 0.6 * p)
+        cr.new_path()
+        cr.arc(x, y, 4.2 * s, 0, TAU)
         cr.fill()
-        cr.set_source_rgba(1, 1, 1, 0.85)
-        self.diamond(cr, x, y, r * 0.38)
-        cr.fill()
-
-    def spans(self, cr, parts, x, y, size, align="left", glitch_p=1.0):
-        """Draw (text, colour, bold) pieces on one line, aligned as a whole. The pieces marked
-        bold glitch while glitch_p < 1 (a node that has just locked)."""
-        widths = []
-        for t, _c, b in parts:
-            layout = PangoCairo.create_layout(cr)
-            layout.set_font_description(Pango.FontDescription(f"{MONO} {'Bold' if b else ''} {size:.1f}px"))
-            layout.set_text(t, -1)
-            widths.append(layout.get_pixel_size()[0])
-        total = sum(widths)
-        x0 = x - (total / 2 if align == "center" else total if align == "right" else 0)
-        for (t, c, b), w in zip(parts, widths):
-            if b and glitch_p < 1:
-                self.glitch(cr, t, x0, y, size, c, glitch_p, bold=True)
-            else:
-                self.text(cr, t, x0, y, size, c, bold=b)
-            x0 += w
-        return total
 
     def label(self, cr, W, s, now, st, i, x, y, ang, cx):
         status = status_of(st)
-        col = colour(status, self.scan)
-        locked_at = st.revealed_at or (st.finished_at if st.status not in ("wait", "run") else None)
-        scanning = st.status == "run" and st.revealed_at is None and st.started_at is not None
-        if scanning and now - st.started_at < dm.Pacer.BEAM:
-            sub = "linking"   # the beam is still on its way
-        elif scanning:
-            sub = "scanning" + "." * (int(now * 3) % 4)
-        elif locked_at is not None:
-            sub, _ = typed(self.summary(st), locked_at + 0.15, now, cps=70)
+        waiting = st.status == "wait"
+        lit = st.revealed_at or (st.finished_at if st.status not in ("wait", "run") else None)
+        fade = ease_out((now - lit) / 0.45) if lit is not None else 1.0
+        title = st.title
+        tcol = FG if not waiting else FAINT
+        chip = None
+        if st.status == "run" and st.revealed_at is None:
+            on_way = st.started_at is not None and now - st.started_at < dm.Pacer.BEAM
+            sub, scol, sub_a = ("" if on_way else "Checking…"), self.scan, 0.9
         else:
-            sub = ""
-        tcol = FG if st.status != "wait" else DIM
-        scol = VERDICT.get(status) if status in ("yellow", "red") else DIM
-        gp = clamp((now - locked_at) / 0.3) if locked_at is not None else 1.0
-        num, title = (f"{i + 1:02d}", DIM, False), (st.title.upper(), tcol, True)
-        tag = (TAG.get(status, ""), col, False) if st.status != "wait" else ("", FAINT, False)
-        size = 13.5 * s
+            sub = self.summary(st) if not waiting else ""
+            scol = (0.93, 0.62, 0.62) if status == "red" else SUB
+            sub_a = fade
+            chip = None if waiting else status
+        size = 13 * s
+        num = f"{i + 1:02d}"
+        nw = self.layout(cr, num, 10.5 * s, MONO).get_pixel_size()[0]
+        tw = self.layout(cr, title, size, SANS, "Medium").get_pixel_size()[0]
+        cw = self.chip_width(cr, chip, s) if chip else 0
+        total = nw + 8 * s + tw + (10 * s + cw if chip else 0)
         if abs(math.cos(ang)) < 0.12:  # the node right at the top or bottom: label over / under it
             above = math.sin(ang) < 0
-            ty = y - (48 if sub else 34) * s if above else y + 16 * s
-            self.spans(cr, [num, (" ", FG, False), title, (" ", FG, False), tag], x, ty, size, "center", gp)
-            if sub:
-                self.text(cr, sub, x, ty + 19 * s, 11.5 * s, scol, align="center", width=260 * s)
+            ty = y - (46 if sub else 32) * s if above else y + 14 * s
+            x0, sx, sal, swidth = x - total / 2, x, "center", 270 * s
         else:
             right = x >= cx
-            tx = x + (22 if right else -22) * s
-            parts = [num, (" ", FG, False), title, (" ", FG, False), tag]
-            self.spans(cr, parts, tx, y - 18 * s, size, "left" if right else "right", gp)
-            if sub:
-                room = (W - tx if right else tx) - 28 * s
-                self.text(cr, sub, tx, y + 1 * s, 11.5 * s, scol, align="left" if right else "right",
-                          width=max(80 * s, min(300 * s, room)))
+            tx = x + (18 if right else -18) * s
+            ty = y - 18 * s
+            x0 = tx if right else tx - total
+            room = (W - tx if right else tx) - 30 * s
+            sx, sal, swidth = tx, "left" if right else "right", max(80 * s, min(300 * s, room))
+        self.text(cr, num, x0, ty + 2 * s, 10.5 * s, FAINT, font=MONO)
+        self.text(cr, title, x0 + nw + 8 * s, ty, size, tcol, weight="Medium")
+        if chip:
+            self.chip(cr, chip, x0 + nw + 8 * s + tw + 10 * s, ty + 2 * s, s, alpha=fade)
+        if sub:
+            self.text(cr, sub, sx, ty + 20 * s + (1 - fade) * 4 * s, 11.5 * s, scol, sub_a, align=sal, width=swidth)
 
     def summary(self, st):
         if not st.results:
-            return "nothing to check here" if st.status == "na" else ""
+            return "Nothing to check here" if st.status == "na" else ""
         rank = {"red": 0, "yellow": 1, "green": 2, "info": 3, "n/a": 4}
         top = min(st.results, key=lambda r: rank.get(r.get("status"), 5))
-        more = f"  (+{len(st.results) - 1})" if len(st.results) > 1 else ""
-        return f"{top.get('summary', '')}{more}"
+        more = f"  +{len(st.results) - 1} more" if len(st.results) > 1 else ""
+        text = top.get("summary", "")
+        return (text[:1].upper() + text[1:]) + more
 
     # ------------------------------------------------ the centre
 
-    def menu(self, cr, s, now, cx, cy, waiting):
-        w, rh = 380 * s, 34 * s
-        h = 34 * s + rh * len(MENU) + 14 * s
-        x, y = cx - w / 2, cy - h / 2 - 12 * s
-        cr.set_source_rgba(0.02, 0.02, 0.04, 0.82)
-        cr.rectangle(x, y, w, h)
-        cr.fill()
-        cr.set_source_rgba(*self.accent, 0.6)
-        cr.set_line_width(1.2 * s)
-        cr.rectangle(x, y, w, h)
-        cr.stroke()
+    def palette(self, cr, s, now, cx, cy, waiting):
+        """A command palette: what to run."""
+        w, rh = 420 * s, 50 * s
+        h = 44 * s + rh * len(MENU) + 8 * s
+        x, y = cx - w / 2, cy - h / 2 - 10 * s
+        self.box(cr, x, y, w, h, fill_a=0.94, line_a=0.10, r=8 * s)
         if waiting:
-            spin = SPINNER[int(now * 12) % len(SPINNER)]
-            self.text(cr, f"> authenticating {spin}", x + 16 * s, y + 10 * s, 14 * s, self.accent, bold=True)
+            spin = SPINNER[int(now * 10) % len(SPINNER)]
+            self.text(cr, f"Waiting for your password  {spin}", x + 18 * s, y + 14 * s, 13 * s, FG, weight="Medium")
         else:
-            self.text(cr, "> select diagnostic", x + 16 * s, y + 10 * s, 14 * s, self.accent, bold=True)
-        yy = y + 38 * s
-        for i, (name, dur, _args) in enumerate(MENU):
-            sel = i == self.menu_sel
+            self.text(cr, "Run diagnostics", x + 18 * s, y + 14 * s, 13 * s, FG, weight="Medium")
+            self.text(cr, "↑↓  Enter", x + w - 18 * s, y + 15 * s, 11 * s, FAINT, font=MONO, align="right")
+        self.hline(cr, x + 1, x + w - 1, y + 42 * s, 0.07)
+        yy = y + 46 * s
+        for i, (name, dur, _args, desc) in enumerate(MENU):
+            sel = i == self.menu_sel and not waiting
             if sel:
-                cr.set_source_rgba(*self.accent, 0.22 if not waiting else 0.1)
-                cr.rectangle(x + 8 * s, yy - 2 * s, w - 16 * s, rh - 4 * s)
+                cr.set_source_rgba(*self.accent, 0.12)
+                cr.rectangle(x + 6 * s, yy + 2 * s, w - 12 * s, rh - 4 * s)
                 cr.fill()
-                self.text(cr, "▶", x + 14 * s, yy + 4 * s, 13 * s, self.accent)
-            col = FG if sel else DIM
-            self.text(cr, f"[{i + 1}] {name}", x + 36 * s, yy + 4 * s, 14 * s, col, bold=sel)
-            self.text(cr, dur, x + w - 16 * s, yy + 4 * s, 13 * s, col, align="right")
+                cr.set_source_rgba(*self.accent, 0.9)
+                cr.rectangle(x + 6 * s, yy + 2 * s, 2 * s, rh - 4 * s)
+                cr.fill()
+            kx, ky = x + 20 * s, yy + 14 * s
+            self.box(cr, kx, ky, 20 * s, 20 * s, fill=(0.10, 0.11, 0.13), fill_a=1, line_a=0.16, r=4 * s)
+            self.text(cr, str(i + 1), kx + 10 * s, ky + 2.5 * s, 11 * s, FG if sel else SUB, font=MONO, align="center")
+            self.text(cr, name, x + 54 * s, yy + 8 * s, 13.5 * s, FG if not waiting else SUB, weight="Medium")
+            self.text(cr, desc, x + 54 * s, yy + 27 * s, 11.5 * s, SUB)
+            self.text(cr, dur, x + w - 18 * s, yy + 17 * s, 11.5 * s, SUB, font=MONO, align="right")
             if not waiting:
-                self.hits.append((x, yy - 2 * s, w, rh, f"menu:{i}"))
+                self.hits.append((x, yy, w, rh, f"menu:{i}"))
             yy += rh
         if self.last:
-            word = {"green": "[ OK ] all good", "yellow": "[WARN] worth a look", "red": "[FAIL] problem found"}.get(self.last["overall"], "")
-            msg = f"last scan {self.last['created'][:16].replace('T', ' ')}  {word}"
-            col = VERDICT.get(self.last["overall"], DIM)
-            tw, th = self.text(cr, msg, cx, y + h + 12 * s, 12 * s, col, align="center")
-            self.hits.append((cx - tw / 2, y + h + 12 * s, tw, th, "last"))
+            st = self.last["overall"]
+            word = WORDS.get(st, "")
+            ly = y + h + 14 * s
+            lead = f"Last check here  ·  {self.last['created'][:16].replace('T', ' ')}  ·  "
+            lw = self.layout(cr, lead, 11.5 * s).get_pixel_size()[0]
+            ww = self.layout(cr, word, 11.5 * s, SANS, "Medium").get_pixel_size()[0]
+            x0 = cx - (lw + 10 * s + ww) / 2
+            self.text(cr, lead, x0, ly, 11.5 * s, SUB)
+            col = VERDICT.get(st, SUB)
+            cr.set_source_rgba(*col, 1)
+            cr.new_path()
+            cr.arc(x0 + lw + 3.5 * s, ly + 8 * s, 3 * s, 0, TAU)
+            cr.fill()
+            self.text(cr, word, x0 + lw + 10 * s, ly, 11.5 * s, col, weight="Medium")
+            self.hits.append((x0, ly, lw + 10 * s + ww, 18 * s, "last"))
 
     def ring(self, cr, s, now, run, cx, cy, r, final_from=None):
+        """One thin segment per check, in its status colour once checked."""
         stars = run.stars
         n = max(1, len(stars))
-        # outer tick ring, turning slowly
-        cr.set_source_rgba(*FAINT, 1)
         cr.set_line_width(1 * s)
-        rot = now * 0.12
-        for k in range(72):
-            a = rot + k * TAU / 72
-            l = 7 * s if k % 6 == 0 else 3.5 * s
-            cr.move_to(cx + (r + 16 * s) * math.cos(a), cy + (r + 16 * s) * math.sin(a))
-            cr.line_to(cx + (r + 16 * s + l) * math.cos(a), cy + (r + 16 * s + l) * math.sin(a))
+        cr.set_source_rgba(*HAIR, 0.05)
+        cr.new_path()
+        cr.arc(cx, cy, r + 12 * s, 0, TAU)
         cr.stroke()
-        gap = 0.045
+        cr.set_source_rgba(*HAIR, 0.14)
+        for k in range(n):  # a tick per check, outside
+            a = -math.pi / 2 + k * TAU / n
+            cr.move_to(cx + (r + 9 * s) * math.cos(a), cy + (r + 9 * s) * math.sin(a))
+            cr.line_to(cx + (r + 15 * s) * math.cos(a), cy + (r + 15 * s) * math.sin(a))
+        cr.stroke()
+        gap = 0.035
+        cr.set_line_width(3 * s)
         for i, st in enumerate(stars):
             a0 = -math.pi / 2 + i * TAU / n + gap
             a1 = -math.pi / 2 + (i + 1) * TAU / n - gap
             status = status_of(st)
+            alpha = 1.0
             if final_from is not None:
-                on = now >= final_from + i * 0.07
-                status = status if on else "wait"
+                alpha = ease_out((now - final_from - i * 0.06) / 0.4)
+            cr.set_source_rgba(*HAIR, 0.07)
+            cr.new_path()
+            cr.arc(cx, cy, r, a0, a1)
+            cr.stroke()
+            if status == "wait":
+                continue
             if status == "run":
-                col, a = self.scan, 0.45 + 0.4 * math.sin(now * 5) ** 2
-            elif status == "wait":
-                col, a = (1, 1, 1), 0.07
+                col, alpha = self.scan, 0.45 + 0.35 * (0.5 + 0.5 * math.sin(now * 3.5))
             else:
-                col, a = colour(status, self.scan), 0.95
-            if status not in ("wait",):
-                cr.set_source_rgba(*col, a * 0.25)
-                cr.set_line_width(20 * s)
-                cr.new_path()
-                cr.arc(cx, cy, r, a0, a1)
-                cr.stroke()
-            cr.set_source_rgba(*col, a)
-            cr.set_line_width(9 * s)
+                col = colour(status, self.scan)
+            cr.set_source_rgba(*col, alpha)
             cr.new_path()
             cr.arc(cx, cy, r, a0, a1)
             cr.stroke()
 
     def progress(self, cr, s, now, run, cx, cy):
-        r = 100 * s
+        r = 96 * s
         self.ring(cr, s, now, run, cx, cy, r)
-        pct = int(round(self.shown * 100))
-        self.text(cr, f"{pct:03d}%", cx, cy - 40 * s, 40 * s, FG, bold=True, align="center")
+        pct = f"{int(round(self.shown * 100))}"
+        pw = self.layout(cr, pct, 44 * s, MONO, "Light").get_pixel_size()[0]
+        uw = self.layout(cr, "%", 16 * s, MONO).get_pixel_size()[0]
+        x0 = cx - (pw + 2 * s + uw) / 2
+        self.text(cr, pct, x0, cy - 40 * s, 44 * s, FG, font=MONO, weight="Light")
+        self.text(cr, "%", x0 + pw + 2 * s, cy - 23 * s, 16 * s, SUB, font=MONO)
         cur = run.star(run.current)
-        label = f"> {cur.title.lower()}" if cur else "> starting"
-        w, h = self.text(cr, label, cx, cy + 10 * s, 13 * s, self.scan, align="center")
-        if cursor_on(now):
-            cr.set_source_rgba(*self.scan, 0.9)
-            cr.rectangle(cx + w / 2 + 3 * s, cy + 12 * s, 7 * s, h - 4 * s)
-            cr.fill()
+        self.caption(cr, "Checking", cx, cy + 14 * s, s, SUB, align="center")
+        self.text(cr, cur.title if cur else "Starting", cx, cy + 30 * s, 13 * s, FG, weight="Medium", align="center",
+                  width=150 * s)
         live = run.live
         if run.current == "cpu_load" and live and live.get("t"):
             left = max(0, (live.get("total") or 0) - (live.get("t") or 0))
-            self.text(cr, f"TEMP {live.get('temp', '?')}°C/{live.get('tjmax') or '?'}", cx, cy + 32 * s, 11.5 * s, FG, align="center")
-            clk = f"CLK {live['mhz'] / 1000:.2f}GHz" if live.get("mhz") else "CLK ?"
-            self.text(cr, f"{clk}  T-{left // 60:02d}:{left % 60:02d}", cx, cy + 48 * s, 11.5 * s, DIM, align="center")
-            self.trace(cr, s, run, cx, cy + r + 34 * s, 240 * s, 38 * s)
+            clk = f"{live['mhz'] / 1000:.2f} GHz" if live.get("mhz") else "? GHz"
+            line = f"{live.get('temp', '?')} °C  ·  {clk}  ·  {left // 60}:{left % 60:02d} left"
+            self.text(cr, line, cx, cy + r + 26 * s, 11.5 * s, SUB, font=MONO, align="center")
+            self.trace(cr, s, run, cx, cy + r + 50 * s, 260 * s, 34 * s)
 
     def trace(self, cr, s, run, cx, top, w, h):
+        """CPU temperature during the stress test, against the CPU's own limit (dashed)."""
         temps = run.temps[-180:]
         tj = run.live.get("tjmax") or 100
         if len(temps) < 2:
             return
         lo, hi = min(min(temps), 30), max(tj, max(temps))
         x0 = cx - w / 2
-        cr.set_source_rgba(0.02, 0.02, 0.04, 0.8)
-        cr.rectangle(x0 - 6 * s, top - 6 * s, w + 12 * s, h + 12 * s)
-        cr.fill()
-        cr.set_source_rgba(*FAINT, 1)
-        cr.set_line_width(1 * s)
-        cr.rectangle(x0 - 6 * s, top - 6 * s, w + 12 * s, h + 12 * s)
-        cr.stroke()
         ly = top + h - (tj - lo) / (hi - lo) * h
-        cr.set_source_rgba(*VERDICT["red"], 0.55)
+        cr.set_source_rgba(*VERDICT["red"], 0.5)
+        cr.set_line_width(1 * s)
         cr.set_dash([3 * s, 3 * s])
         cr.move_to(x0, ly)
         cr.line_to(x0 + w, ly)
         cr.stroke()
         cr.set_dash([])
-        cr.set_source_rgba(*self.accent, 1)
-        cr.set_line_width(1.8 * s)
+        self.hline(cr, x0, x0 + w, top + h, 0.10)
+        cr.set_source_rgba(*self.scan, 0.9)
+        cr.set_line_width(1.4 * s)
         for i, t in enumerate(temps):
             x = x0 + i / (len(temps) - 1) * w
             y = top + h - (t - lo) / (hi - lo) * h
@@ -619,109 +535,100 @@ class Scene:
         cr.stroke()
 
     def diagnosis(self, cr, s, now, run, cx, cy):
-        r = 100 * s
+        r = 96 * s
         end = run.ended_at or now
         self.ring(cr, s, now, run, cx, cy, r, final_from=end)
         if run.phase == "done":
-            word, col = WORDS.get(run.overall, (run.overall or "").upper()), VERDICT.get(run.overall, FG)
+            word, col = WORDS.get(run.overall, (run.overall or "").title()), VERDICT.get(run.overall, FG)
         else:
-            word, col = ("STOPPED" if run.phase == "stopped" else "INCOMPLETE"), DIM
-        self.text(cr, "DIAGNOSIS", cx, cy - 34 * s, 11.5 * s, DIM, align="center")
-        start = end + 0.07 * len(run.stars) + 0.2
-        shown, done = typed(word, start, now, cps=16)
-        if shown:
-            self.glitch(cr, shown, cx, cy - 14 * s, 22 * s if len(word) > 10 else 26 * s, col, clamp((now - start) / 0.6), align="center")
+            word, col = ("Stopped" if run.phase == "stopped" else "Incomplete"), SUB
+        start = end + 0.06 * len(run.stars) + 0.2
+        a = ease_out((now - start) / 0.6)
+        self.caption(cr, "Diagnosis", cx, cy - 34 * s, s, SUB, a, align="center")
+        self.text(cr, word, cx, cy - 16 * s + (1 - a) * 6 * s, 21 * s, col, a, weight="Semi-Bold", align="center")
         n = sum(1 for st in run.stars if status_of(st) not in ("wait", "run"))
         el = int(end - (run.started_at or end))
-        self.text(cr, f"{n}/{len(run.stars)} checks · {el // 60}:{el % 60:02d}", cx, cy + 22 * s, 11.5 * s, DIM, align="center")
+        self.text(cr, f"{n} of {len(run.stars)} checks  ·  {el // 60}:{el % 60:02d}", cx, cy + 16 * s, 11.5 * s, SUB, a,
+                  font=MONO, align="center")
 
-    # ------------------------------------------------ the log panel
+    # ------------------------------------------------ activity log and actions
 
-    def log(self, cr, W, H, s, now, run, pad, top, waiting):
-        x0, x1, bottom = pad, W - pad, H - 18 * s
-        split = x1 - 300 * s
-        cr.set_source_rgba(0.015, 0.015, 0.03, 0.88)
-        cr.rectangle(x0, top, x1 - x0, bottom - top)
-        cr.fill()
-        cr.set_source_rgba(*FAINT, 1)
-        cr.set_line_width(1 * s)
-        cr.rectangle(x0, top, x1 - x0, bottom - top)
-        cr.stroke()
-        cr.move_to(split, top + 10 * s)
-        cr.line_to(split, bottom - 10 * s)
-        cr.stroke()
-        # title tabs on the border
-        for tx, title in ((x0 + 14 * s, " LOG "), (split + 14 * s, " COMMANDS ")):
-            w, h = self.text(cr, title, tx, top - 8 * s, 11 * s, BG, 0)
-            cr.set_source_rgba(0.015, 0.015, 0.03, 1)
-            cr.rectangle(tx, top - 1 * s, w, 2 * s)
-            cr.fill()
-            self.text(cr, title, tx, top - 8 * s, 11 * s, self.accent, bold=True)
-        lh = 19 * s
-        rows = max(1, int((bottom - top - 22 * s) / lh))
+    def activity(self, cr, W, H, s, now, run, pad, top, waiting):
+        bottom = H - 20 * s
+        split = W - pad - 290 * s
+        self.box(cr, pad, top, split - pad - 12 * s, bottom - top, fill_a=0.9, line_a=0.08, r=8 * s)
+        self.box(cr, split, top, W - pad - split, bottom - top, fill_a=0.9, line_a=0.08, r=8 * s)
+        self.caption(cr, "Activity", pad + 18 * s, top + 14 * s, s)
+        self.caption(cr, "Actions", split + 18 * s, top + 14 * s, s)
+        lh = 20 * s
+        rows = max(1, int((bottom - top - 44 * s) / lh))
         lines = list(run.feed)
         mono_now, wall_now = now, time.time()
         if waiting:
-            lines.append((waiting, "auth           waiting for your password " + SPINNER[int(now * 12) % len(SPINNER)], "run"))
+            lines.append((waiting, f"{'Password':<15}Waiting for your password {SPINNER[int(now * 10) % len(SPINNER)]}", "run"))
         if not lines:
-            lines = [(None, "ready. pick a diagnostic: [1]-[4] or click", "info")]
+            lines = [(None, f"{'Ready':<15}Choose a check: keys 1–4, or click", "info")]
         lines = lines[-rows:]
-        y = top + 12 * s
+        y = top + 38 * s
+        x0 = pad + 18 * s
         for k, (t, msg, status) in enumerate(lines):
             stamp = datetime.datetime.fromtimestamp(wall_now - (mono_now - t)).strftime("%H:%M:%S") if t else "--:--:--"
             newest = k == len(lines) - 1
-            shown, done = typed(msg, t, now, cps=90) if (newest and t) else (msg, True)
-            self.text(cr, stamp, x0 + 14 * s, y, 12 * s, DIM)
-            tag = TAG.get(status, "[    ]")
-            self.text(cr, tag, x0 + 104 * s, y, 12 * s, colour(status, self.scan) if status != "info" else FG, bold=True)
-            w, h = self.text(cr, shown, x0 + 162 * s, y, 12 * s, FG if newest else (0.70, 0.72, 0.80), width=split - x0 - 180 * s)
-            if newest and cursor_on(now):
-                cr.set_source_rgba(*self.accent, 0.9)
-                cr.rectangle(x0 + 162 * s + w + 3 * s, y + 2 * s, 7 * s, h - 3 * s)
-                cr.fill()
+            a = ease_out((now - t) / 0.35) if (newest and t) else 1.0
+            off = (1 - a) * 5 * s
+            name, body = msg[:15].strip(), msg[15:]
+            self.text(cr, stamp, x0, y + off, 11.5 * s, FAINT, a, font=MONO)
+            col = colour(status, self.scan) if status != "info" else INFO
+            self.text(cr, CHIP.get(status, ""), x0 + 82 * s, y + off, 11 * s, col, a, font=MONO, weight="Bold")
+            self.text(cr, name, x0 + 128 * s, y + off, 11.5 * s, SUB, a, font=MONO)
+            self.text(cr, body, x0 + 246 * s, y + off, 11.5 * s, FG if newest else (0.78, 0.79, 0.82), a, font=MONO,
+                      width=split - x0 - 270 * s)
             y += lh
-        # commands
         if run.phase == "idle":
-            cmds = [("ENTER", "start", "cmd:start"), ("R", "reports", "cmd:reports"), ("ESC", "close", "cmd:close")]
+            cmds = [("↵", "Start selected check", "cmd:start"), ("R", "Open reports folder", "cmd:reports"),
+                    ("Esc", "Close", "cmd:close")]
         elif run.phase == "running":
-            cmds = [("S", "stop safely", "cmd:stop")]
+            cmds = [("S", "Stop safely", "cmd:stop")]
         else:
-            cmds = [("O", "owner summary", "cmd:owner"), ("F", "full report", "cmd:report"), ("N", "new check", "cmd:new")]
-        y = top + 12 * s
+            cmds = [("O", "Owner summary", "cmd:owner"), ("F", "Full report", "cmd:report"), ("N", "New check", "cmd:new")]
+        y = top + 38 * s
         for key, label, action in cmds:
             hov = self.hover == action
             if hov:
-                cr.set_source_rgba(*self.accent, 0.2)
-                cr.rectangle(split + 10 * s, y - 3 * s, x1 - split - 20 * s, 24 * s)
+                cr.set_source_rgba(*self.accent, 0.12)
+                cr.rectangle(split + 8 * s, y - 4 * s, W - pad - split - 16 * s, 28 * s)
                 cr.fill()
-            w, _ = self.text(cr, f"[{key}]", split + 20 * s, y, 13 * s, self.accent, bold=True)
-            self.text(cr, label, split + 20 * s + max(w, 64 * s) + 8 * s, y, 13 * s, FG if hov else (0.78, 0.80, 0.88))
-            self.hits.append((split + 10 * s, y - 3 * s, x1 - split - 20 * s, 24 * s, action))
-            y += 28 * s
+            kw = max(22 * s, self.layout(cr, key, 11 * s, MONO).get_pixel_size()[0] + 12 * s)
+            self.box(cr, split + 18 * s, y, kw, 20 * s, fill=(0.10, 0.11, 0.13), fill_a=1, line_a=0.16, r=4 * s)
+            self.text(cr, key, split + 18 * s + kw / 2, y + 2.5 * s, 11 * s, FG, font=MONO, align="center")
+            self.text(cr, label, split + 18 * s + kw + 12 * s, y + 1.5 * s, 13 * s, FG if hov else (0.82, 0.83, 0.86))
+            self.hits.append((split + 8 * s, y - 4 * s, W - pad - split - 16 * s, 28 * s, action))
+            y += 32 * s
 
     # ------------------------------------------------ a node's findings
 
-    def details(self, cr, W, s, run, cx, cy):
+    def details(self, cr, W, H, s, run, cx, cy):
         st = run.star(self.detail)
         if not st:
             self.detail = None
             return
-        w = 560 * s
-        h = (52 + 44 * len(st.results)) * s
+        cr.set_source_rgba(*BG, 0.55)
+        cr.paint()
+        w = 580 * s
+        h = (60 + 50 * len(st.results)) * s
         x, y = cx - w / 2, cy - h / 2
-        cr.set_source_rgba(0.02, 0.02, 0.04, 0.96)
-        cr.rectangle(x, y, w, h)
-        cr.fill()
-        cr.set_source_rgba(*colour(status_of(st), self.accent), 0.9)
-        cr.set_line_width(1.4 * s)
-        cr.rectangle(x, y, w, h)
-        cr.stroke()
-        self.text(cr, f"── {st.title.upper()} ──", x + 16 * s, y + 12 * s, 14 * s, FG, bold=True)
-        yy = y + 42 * s
+        self.box(cr, x, y, w, h, fill_a=0.98, line_a=0.14, r=10 * s)
+        self.text(cr, st.title, x + 22 * s, y + 18 * s, 15 * s, FG, weight="Semi-Bold")
+        self.chip(cr, status_of(st), x + w - 22 * s, y + 20 * s, s, align="right")
+        self.hline(cr, x + 1, x + w - 1, y + 50 * s, 0.07)
+        yy = y + 62 * s
         for r in st.results:
             status = (r.get("status") or "info").replace("n/a", "na")
-            self.text(cr, TAG.get(status, "[    ]"), x + 16 * s, yy, 12.5 * s, colour(status, self.accent), bold=True)
-            self.text(cr, r.get("title", ""), x + 80 * s, yy, 12.5 * s, FG, bold=True, width=w - 100 * s)
-            self.text(cr, r.get("summary", ""), x + 80 * s, yy + 18 * s, 12 * s, DIM, width=w - 100 * s)
-            yy += 44 * s
-        self.hits.append((0, 0, W, 10_000, "detail:close"))
+            cr.set_source_rgba(*colour(status, self.scan), 1)
+            cr.new_path()
+            cr.arc(x + 26 * s, yy + 8 * s, 3 * s, 0, TAU)
+            cr.fill()
+            self.text(cr, r.get("title", ""), x + 40 * s, yy, 13 * s, FG, weight="Medium", width=w - 70 * s)
+            self.text(cr, r.get("summary", ""), x + 40 * s, yy + 19 * s, 12 * s, SUB, width=w - 70 * s)
+            yy += 50 * s
+        self.hits.append((0, 0, W, H, "detail:close"))

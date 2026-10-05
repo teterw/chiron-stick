@@ -47,7 +47,7 @@ class Run:
         if s and s.status == "run":
             s.status, s.finished_at = s.verdict, now
             if not s.results:
-                self.feed.append((now, f"{s.title.lower():<15}nothing to check here", "na"))
+                self.feed.append((now, f"{s.title:<15}Nothing to check here", "na"))
         self.current = None
 
     def say(self, now, text, status):
@@ -64,20 +64,21 @@ class Run:
             s = self.star(e.get("id"))
             if s:
                 s.status, s.started_at, self.current = "run", now, s.id
-                self.say(now, f"{s.title.lower():<15}scanning…", "run")
+                self.say(now, f"{s.title:<15}Checking…", "run")
         elif kind == "result":
             s = self.star(e.get("id"))
             r = e.get("result")
             if s and isinstance(r, dict):
                 s.results.append(r)
                 s.revealed_at = s.revealed_at or now
-                self.say(now, f"{s.title.lower():<15}{r.get('summary', '')}", r.get("status", "info").replace("n/a", "na"))
+                text = r.get("summary", "")
+                self.say(now, f"{s.title:<15}{text[:1].upper()}{text[1:]}", r.get("status", "info").replace("n/a", "na"))
         elif kind == "tick":
             self.live = {k: e.get(k) for k in ("t", "total", "temp", "tjmax", "mhz")}
             if e.get("temp") is not None:
                 self.temps.append(e["temp"])
             if (e.get("t") or 0) % 30 == 0 and e.get("t"):
-                self.say(now, f"{'cpu load':<15}{e.get('temp')} °C · {e.get('mhz') or '?'} MHz · {e['t']} s", "run")
+                self.say(now, f"{'CPU load':<15}{e.get('temp')} °C · {e.get('mhz') or '?'} MHz · {e['t']} s", "run")
         elif kind == "log":
             self.log = (self.log + [e.get("text", "")])[-50:]
         elif kind == "done":
@@ -86,12 +87,12 @@ class Run:
             self.overall, self.folder = e.get("overall"), e.get("folder")
             self.compare, self.compare_with = e.get("compare") or [], e.get("compare_with")
             for c in self.compare[:3]:
-                self.say(now, f"{'since last':<15}{c.get('name')}: {c.get('before')} → {c.get('after')}", "info")
-            self.say(now, f"{'diagnosis':<15}{ {'green': 'all good', 'yellow': 'worth a look', 'red': 'problem found'}.get(self.overall, self.overall)}", self.overall or "info")
+                self.say(now, f"{'Since last':<15}{c.get('name')}: {c.get('before')} → {c.get('after')}", "info")
+            self.say(now, f"{'Diagnosis':<15}{ {'green': 'All good', 'yellow': 'Worth a look', 'red': 'Problem found'}.get(self.overall, self.overall)}", self.overall or "info")
         elif kind == "stopped":
             self._finish_current(now)
             self.phase, self.ended_at = "stopped", now
-            self.say(now, f"{'stopped':<15}on request: everything cleaned up", "na")
+            self.say(now, f"{'Stopped':<15}On request: everything cleaned up", "na")
 
     def progress(self):
         """0..1: finished steps, plus how far the CPU load test has got."""
