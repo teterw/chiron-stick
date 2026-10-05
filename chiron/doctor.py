@@ -1,24 +1,16 @@
-"""chiron doctor: the doctor launcher, "Star chart" (Tete's pick, 2026-10-04).
-
-Every check is a star; the stars sit in a ring on the night sky made from the person's own wallpaper,
-joined like a constellation. A check lights its star green, amber or red as its findings come in;
-the centre shows the progress, live CPU readings during the stress test, then the verdict.
+"""chiron doctor: the doctor launcher. A star chart of every check in a terminal / HUD style
+(doctor_scene.py), played back at a watchable pace (doctor_model.Pacer).
 
 Runs as the desktop user. The checks run as root through pkexec (`chiron --events …`, see
 chiron/events.py), so the password goes to the system's own dialog, never through this window.
-Drawn with cairo on the CPU (works without a GPU driver), and it redraws only a few times a second
-while a stress test runs, so it doesn't take CPU time from the test. Verdict colours are fixed
-(CLAUDE.md decision 10): only the lines, the ring and the buttons take the theme's accent."""
-import datetime
+Drawn with cairo on the CPU (works without a GPU driver), and it redraws only 8 times a second
+while a stress test runs, so it doesn't take CPU time from the test."""
 import os
-import pwd
 import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
-from chiron import doctor_model as dm
-from chiron.checks import MODULES, TITLES
 
 HERE = Path(__file__).resolve().parent
 RICE = HERE.parent / "rice"  # /opt/chiron/rice on the stick
@@ -26,20 +18,7 @@ CHIRON = "/usr/local/bin/chiron"
 REPORTS = Path.home() / "reports"
 LOG = Path.home() / ".cache" / "chiron" / "doctor.log"
 
-FONT, MONO = "Noto Sans", "JetBrainsMono Nerd Font"
-FG, MUTED, WAIT = (0.93, 0.92, 0.96), (0.58, 0.55, 0.68), (0.30, 0.28, 0.40)
-INFO, NA = (0.86, 0.84, 0.95), (0.48, 0.46, 0.58)
-VIOLET = (0.545, 0.361, 0.965)
-VERDICT = {"green": (0.13, 0.77, 0.37), "yellow": (0.96, 0.62, 0.04), "red": (0.94, 0.27, 0.27)}  # fixed
-WORDS = {"green": "All good", "yellow": "Worth a look", "red": "Problem found"}
-ACTIONS = [("Health check", "about 3 min · reads only", ["report"]),
-           ("Quick check", "1 min · no disk speed test", ["report", "--quick"]),
-           ("Stress test", "10 min under full load", ["stress"]),
-           ("Check + stress", "everything · about 13 min", ["full"])]
-
-
-def colour(status, accent):
-    return VERDICT.get(status) or {"run": accent, "info": INFO, "na": NA}.get(status, WAIT)
+VIOLET = (0.545, 0.361, 0.965)  # Chiron violet: the accent when there is no desktop theme
 
 
 def load_module(name, path):
@@ -50,12 +29,6 @@ def load_module(name, path):
 
 
 # ---------------------------------------------------------------- the person and the machine
-
-def greeting(now=None):
-    h = (now or datetime.datetime.now()).hour
-    part = "night" if h < 5 else "morning" if h < 12 else "afternoon" if h < 18 else "evening"
-    return f"Good {part}, {pwd.getpwuid(os.getuid()).pw_name}"
-
 
 def this_machine():
     """({sys_vendor, product_name}, "CPU · RAM"): what a normal user can read."""

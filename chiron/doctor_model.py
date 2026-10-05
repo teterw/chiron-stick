@@ -2,6 +2,7 @@
 (chiron/events.py) become stars that light up, a progress fraction, live CPU readings and a verdict.
 Kept apart from the window so it can be tested without a display."""
 import json
+from collections import deque
 from pathlib import Path
 
 from chiron.model import Status, worst
@@ -15,6 +16,7 @@ class Star:
         self.status = "wait"      # wait | run | green | yellow | red | info | na
         self.results = []         # result dicts (area, title, status, summary, …)
         self.started_at = self.finished_at = None
+        self.revealed_at = None   # when its first finding showed (the star lights up then)
 
     @property
     def verdict(self):
@@ -34,6 +36,7 @@ class Run:
         self.overall = self.folder = None
         self.compare, self.compare_with = [], None
         self.log = []
+        self.feed = []            # the log panel: (time, text, status) per line
         self.started_at = self.ended_at = None
 
     def star(self, sid):
@@ -43,7 +46,12 @@ class Run:
         s = self.star(self.current)
         if s and s.status == "run":
             s.status, s.finished_at = s.verdict, now
+            if not s.results:
+                self.feed.append((now, f"{s.title.lower():<15}nothing to check here", "na"))
         self.current = None
+
+    def say(self, now, text, status):
+        self.feed = (self.feed + [(now, text, status)])[-60:]
 
     def apply(self, e, now):
         kind = e.get("e")
@@ -56,14 +64,20 @@ class Run:
             s = self.star(e.get("id"))
             if s:
                 s.status, s.started_at, self.current = "run", now, s.id
+                self.say(now, f"{s.title.lower():<15}scanning…", "run")
         elif kind == "result":
             s = self.star(e.get("id"))
-            if s and isinstance(e.get("result"), dict):
-                s.results.append(e["result"])
+            r = e.get("result")
+            if s and isinstance(r, dict):
+                s.results.append(r)
+                s.revealed_at = s.revealed_at or now
+                self.say(now, f"{s.title.lower():<15}{r.get('summary', '')}", r.get("status", "info").replace("n/a", "na"))
         elif kind == "tick":
             self.live = {k: e.get(k) for k in ("t", "total", "temp", "tjmax", "mhz")}
             if e.get("temp") is not None:
                 self.temps.append(e["temp"])
+            if (e.get("t") or 0) % 30 == 0 and e.get("t"):
+                self.say(now, f"{'cpu load':<15}{e.get('temp')} °C · {e.get('mhz') or '?'} MHz · {e['t']} s", "run")
         elif kind == "log":
             self.log = (self.log + [e.get("text", "")])[-50:]
         elif kind == "done":
@@ -71,9 +85,13 @@ class Run:
             self.phase, self.ended_at = "done", now
             self.overall, self.folder = e.get("overall"), e.get("folder")
             self.compare, self.compare_with = e.get("compare") or [], e.get("compare_with")
+            for c in self.compare[:3]:
+                self.say(now, f"{'since last':<15}{c.get('name')}: {c.get('before')} → {c.get('after')}", "info")
+            self.say(now, f"{'diagnosis':<15}{ {'green': 'all good', 'yellow': 'worth a look', 'red': 'problem found'}.get(self.overall, self.overall)}", self.overall or "info")
         elif kind == "stopped":
             self._finish_current(now)
             self.phase, self.ended_at = "stopped", now
+            self.say(now, f"{'stopped':<15}on request: everything cleaned up", "na")
 
     def progress(self):
         """0..1: finished steps, plus how far the CPU load test has got."""
@@ -88,6 +106,58 @@ class Run:
 
     def under_load(self):
         return self.phase == "running" and self.current in STRESS_STEPS
+
+
+class Pacer:
+    """Plays a run's events back at a pace people can follow: chiron may finish ten checks in two
+    seconds, but on screen a beam travels to each star, the star scans, its result locks in, and
+    only then does the next one start. Slow steps (the stress test) take as long as they really do.
+    Events arrive with push(); update(now) applies the ones that are due to self.run."""
+    INTRO = 0.8    # before the first beam: the chart wakes up
+    BEAM = 0.6     # the beam travels along the link to the next star
+    SCAN = 1.1     # the star scans at least this long before its first finding shows
+    GAP = 0.35     # between two findings of one star
+    REVEAL = 0.7   # a finding stays in focus before the beam moves on
+    END = 0.9      # after the last finding, before the verdict
+
+    def __init__(self):
+        self.run = Run()
+        self.queue = deque()
+        self.started = self.step_at = self.result_at = None
+        self.hurry = False        # stopped: show everything left at once
+
+    def push(self, e):
+        if e.get("e") == "stopped":
+            self.hurry = True
+        self.queue.append(e)
+
+    def due(self, e):
+        kind = e.get("e")
+        if self.hurry or kind not in ("check", "result", "done"):
+            return float("-inf")
+        if kind == "check" and self.step_at is None:
+            return (self.started if self.started is not None else float("-inf")) + self.INTRO
+        scanned = (self.step_at if self.step_at is not None else float("-inf")) + self.BEAM + self.SCAN
+        last = self.result_at if self.result_at is not None else float("-inf")
+        return max(scanned, last + {"result": self.GAP, "check": self.REVEAL, "done": self.END}[kind])
+
+    def update(self, now):
+        shown = []
+        while self.queue and self.due(self.queue[0]) <= now:
+            e = self.queue.popleft()
+            kind = e.get("e")
+            if kind == "start":
+                self.started, self.step_at, self.result_at = now, None, None
+            elif kind == "check":
+                self.step_at, self.result_at = now, None
+            elif kind == "result":
+                self.result_at = now
+            self.run.apply(e, now)
+            shown.append(e)
+        return shown
+
+    def busy(self):
+        return bool(self.queue)
 
 
 def last_check(reports, machine):

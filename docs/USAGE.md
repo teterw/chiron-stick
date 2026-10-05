@@ -38,7 +38,7 @@ If the PC refuses to boot the stick with a Secure Boot error:
 
 ## 3. Check the PC
 
-The easiest way: click **Chiron Doctor** in the dock (or the menu). Each check is a star in a constellation; it lights up green, amber or red as its results come in, and the centre shows the progress, the CPU's temperature during the stress test, then the verdict. Click a star to see what it found. Choose **Health check** (about 3 minutes, reads only), **Quick check**, **Stress test** or **Check + stress**; the first one asks for your password in the system's own window, then remembers it for a few minutes. **Stop** ends a test safely, and so does closing the window. At the end, **Owner summary** opens the one-page summary for the owner.
+The easiest way: click **Chiron Doctor** in the dock (or the menu) and pick **[1] health check** (about 3 minutes, reads only), **[2] quick check**, **[3] stress test** or **[4] check + stress** (number keys, arrows + Enter, or a click). It asks for your password in the system's own window, then remembers it for a few minutes. Each check is a node in a star chart: it scans, then locks onto `[ OK ]`, `[WARN]` or `[FAIL]`, and the log at the bottom types out what was found. Click a node to see everything it found. **S** stops a test safely, and so does closing the window. At the end, **O** opens the one-page owner summary, **F** the full report, **N** starts over.
 
 Or in a terminal:
 

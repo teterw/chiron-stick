@@ -63,6 +63,77 @@ class Run(unittest.TestCase):
         self.assertTrue(run.under_load())
 
 
+class Pacing(unittest.TestCase):
+    """A check that finishes in a second still plays out star by star (Tete: "even if the test
+    finishes within a second I want the star animation to go slowly to each one")."""
+
+    def burst(self):
+        pacer = dm.Pacer()
+        for e in (START, {"e": "check", "id": "system"}, {"e": "result", "id": "system", "result": res("system", "info")},
+                  {"e": "check", "id": "storage"}, {"e": "result", "id": "storage", "result": res("storage", "red")},
+                  {"e": "done", "overall": "red", "folder": "/r/x"}):
+            pacer.push(e)
+        return pacer
+
+    def times(self, pacer, until=30.0, step=0.05):
+        """When each event reached the screen."""
+        seen, t = [], 0.0
+        while t <= until:
+            for e in pacer.update(t):
+                seen.append((e["e"], e.get("id"), round(t, 2)))
+            t += step
+        return seen
+
+    def test_everything_at_once_plays_slowly(self):
+        P = dm.Pacer
+        seen = self.times(self.burst())
+        at = {(k, i): t for k, i, t in seen}
+        self.assertEqual(at[("start", None)], 0.0)
+        first = at[("check", "system")]
+        self.assertAlmostEqual(first, P.INTRO, delta=0.06)
+        self.assertGreaterEqual(at[("result", "system")] - first, P.BEAM + P.SCAN - 0.01, "beam, then a scan")
+        self.assertGreaterEqual(at[("check", "storage")] - at[("result", "system")], P.REVEAL - 0.01, "time to see it")
+        self.assertGreaterEqual(at[("done", None)] - at[("result", "storage")], P.END - 0.01)
+        self.assertEqual([k for k, _, _ in seen], ["start", "check", "result", "check", "result", "done"])
+
+    def test_slow_real_events_are_not_delayed_more(self):
+        pacer = dm.Pacer()
+        pacer.push(START)
+        pacer.update(0.0)
+        pacer.push({"e": "check", "id": "cpu_load"})
+        pacer.update(5.0)
+        self.assertEqual(pacer.run.current, "cpu_load")
+        pacer.push({"e": "result", "id": "cpu_load", "result": res("cpu_load", "green")})
+        self.assertEqual(len(pacer.update(600.0)), 1, "a 10-minute test shows its result when it comes")
+
+    def test_ticks_wait_behind_their_step(self):
+        pacer = dm.Pacer()
+        for e in (START, {"e": "check", "id": "cpu_load"}, {"e": "tick", "id": "cpu_load", "t": 1, "total": 60, "temp": 70}):
+            pacer.push(e)
+        pacer.update(0.0)
+        pacer.update(0.4)
+        self.assertEqual(pacer.run.temps, [], "the tick belongs to a step not on screen yet")
+        pacer.update(dm.Pacer.INTRO + 0.01)
+        self.assertEqual(pacer.run.temps, [70])
+
+    def test_stop_shows_at_once(self):
+        pacer = self.burst()
+        pacer.queue.pop()  # no done: stopped instead
+        pacer.push({"e": "stopped"})
+        pacer.update(0.0)
+        self.assertEqual(pacer.run.phase, "stopped")
+        self.assertFalse(pacer.queue)
+
+    def test_reveal_time_and_log(self):
+        pacer = self.burst()
+        self.times(pacer)
+        st = pacer.run.star("storage")
+        self.assertIsNotNone(st.revealed_at, "the moment its first finding showed")
+        kinds = [entry[2] for entry in pacer.run.feed]
+        self.assertIn("red", kinds)
+        self.assertEqual(pacer.run.feed[-1][2], "red", "the log ends with the verdict")
+
+
 class Demo(unittest.TestCase):
     def test_demo_is_a_valid_full_run(self):
         run = dm.Run()
