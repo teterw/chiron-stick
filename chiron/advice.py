@@ -94,8 +94,9 @@ ADVICE = {
 }
 
 
-def todo_for(result):
-    """{"area", "title", "status", "action", "part"} for an amber or red finding, else None."""
+def todo_for(result, specs=None):
+    """{"area", "title", "status", "action", "part"} for an amber or red finding, else None.
+    specs: the spec sheet (chiron/specs.py), for parts it knows exactly (RAM type and speed)."""
     if result.get("status") not in GRADED:
         return None
     area = result.get("area", "").split(":")[0]
@@ -104,12 +105,15 @@ def todo_for(result):
     result = {**result, "evidence": result.get("evidence") or {}}
     if fn:
         action, part = fn(result, red)
+        upgrade = ((specs or {}).get("memory") or {}).get("upgrade")
+        if area in ("memory", "ram_test") and upgrade:
+            part = f"RAM stick: {upgrade}, same size as the faulty one"
     else:
         action, part = "See the full report for details.", None
     return {"area": area, "title": result.get("title", area), "status": result["status"], "action": action, "part": part}
 
 
-def todo(results):
+def todo(results, specs=None):
     """The to-do list of a whole report: red first, then amber, in report order within each."""
-    items = [t for t in (todo_for(r) for r in results) if t]
+    items = [t for t in (todo_for(r, specs) for r in results) if t]
     return [t for t in items if t["status"] == "red"] + [t for t in items if t["status"] == "yellow"]

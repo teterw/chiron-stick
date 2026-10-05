@@ -114,6 +114,7 @@ class Scene:
         self.menu_sel = 0
         self.hover = None
         self.detail = None        # node id whose findings are shown
+        self.show_specs = False   # the spec sheet panel
         self.shown = 0.0          # progress, eased
         self.last_now = None
         self.last_seen = None
@@ -219,6 +220,8 @@ class Scene:
         self.activity(cr, W, H, s, now, run, pad, log_top, waiting)
         if self.detail:
             self.details(cr, W, H, s, run, cx, cy)
+        elif self.show_specs and run.specs:
+            self.spec_sheet(cr, W, H, s, run)
 
     # ------------------------------------------------ header
 
@@ -592,6 +595,8 @@ class Scene:
             cmds = [("S", "Stop safely", "cmd:stop")]
         else:
             cmds = [("O", "Owner summary", "cmd:owner"), ("F", "Full report", "cmd:report"), ("N", "New check", "cmd:new")]
+        if run.specs and run.phase != "idle":
+            cmds.append(("I", "Spec sheet", "cmd:specs"))
         y = top + 38 * s
         for key, label, action in cmds:
             hov = self.hover == action
@@ -605,6 +610,42 @@ class Scene:
             self.text(cr, label, split + 18 * s + kw + 12 * s, y + 1.5 * s, 13 * s, FG if hov else (0.82, 0.83, 0.86))
             self.hits.append((split + 8 * s, y - 4 * s, W - pad - split - 16 * s, 28 * s, action))
             y += 32 * s
+
+    # ------------------------------------------------ the spec sheet
+
+    def spec_sheet(self, cr, W, H, s, run):
+        """Everything inside the computer, in two columns of sections."""
+        cr.set_source_rgba(*BG, 0.6)
+        cr.paint()
+        secs = run.specs
+        heights = [(26 + 19 * len(rows) + 14) * s for _sec, rows in secs]
+        half = sum(heights) / 2
+        cols, acc, col = [[], []], 0.0, 0
+        for sec, hh in zip(secs, heights):
+            if col == 0 and acc + hh / 2 > half and cols[0]:
+                col = 1
+            cols[col].append((sec, hh))
+            acc += hh
+        w = min(W - 80 * s, 1100 * s)
+        h = max(sum(hh for _x, hh in c) for c in cols) + 70 * s
+        x, y = W / 2 - w / 2, max(24 * s, H / 2 - h / 2)
+        self.box(cr, x, y, w, h, fill_a=0.98, line_a=0.14, r=10 * s)
+        self.text(cr, "Spec sheet", x + 22 * s, y + 18 * s, 15 * s, FG, weight="Semi-Bold")
+        self.text(cr, "Esc to close  ·  saved with the report as spec-sheet.html", x + w - 22 * s, y + 21 * s, 11 * s, FAINT,
+                  font=MONO, align="right")
+        self.hline(cr, x + 1, x + w - 1, y + 50 * s, 0.07)
+        cw = (w - 66 * s) / 2
+        for ci, column in enumerate(cols):
+            cx0, yy = x + 22 * s + ci * (cw + 22 * s), y + 64 * s
+            for (sec, rows), hh in column:
+                self.caption(cr, sec, cx0, yy, s, SUB)
+                ry = yy + 22 * s
+                for k, v in rows:
+                    self.text(cr, k, cx0, ry, 12 * s, SUB, width=118 * s)
+                    self.text(cr, v, cx0 + 124 * s, ry, 12 * s, FG, width=cw - 128 * s)
+                    ry += 19 * s
+                yy += hh
+        self.hits.append((0, 0, W, H, "specs:close"))
 
     # ------------------------------------------------ a node's findings
 

@@ -154,6 +154,7 @@ class Doctor(Gtk.Window):
         self.pacer = dm.Pacer()
         self.truth = dm.Run()
         self.scene.detail = None
+        self.scene.show_specs = False
         self.scene.last = dm.last_check(REPORTS, self.machine)
 
     # ------------------------------------------------ actions
@@ -168,6 +169,10 @@ class Doctor(Gtk.Window):
             self.scene.detail = arg
         elif kind == "detail":
             self.scene.detail = None
+        elif action == "cmd:specs":
+            self.scene.show_specs = not self.scene.show_specs
+        elif action == "specs:close":
+            self.scene.show_specs = False
         elif action == "last" and self.scene.last:
             self.open_file(self.scene.last["folder"] / "owner-summary.html")
         elif action == "cmd:start":
@@ -208,8 +213,12 @@ class Doctor(Gtk.Window):
         phase = self.run.phase
         if ev.state & Gdk.ModifierType.CONTROL_MASK and name in ("q", "w"):
             self.destroy()
+        elif name in ("i", "I") and self.run.specs and phase != "idle":
+            self.act("cmd:specs")
         elif name == "Escape":
-            if self.scene.detail:
+            if self.scene.show_specs:
+                self.scene.show_specs = False
+            elif self.scene.detail:
                 self.scene.detail = None
             elif phase in ("done", "stopped", "failed"):
                 self.new_check()

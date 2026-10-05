@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--at")
     ap.add_argument("--video", action="store_true")
     ap.add_argument("--detail", help="open this node's findings (e.g. storage)")
+    ap.add_argument("--specs", action="store_true", help="open the spec sheet")
     a = ap.parse_args()
     W, H = (int(v) for v in a.size.split("x"))
     out = Path(a.out)
@@ -62,6 +63,7 @@ def main():
         if want:
             cr = cairo.Context(surf)
             scene.detail = a.detail if a.detail and pacer.run.star(a.detail) else None
+            scene.show_specs = a.specs
             scene.render(cr, W, H, now, run)
             name = f"t{now:06.2f}.png" if times else f"f{frame:05d}.png"
             surf.write_to_png(str(out / name))

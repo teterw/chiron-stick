@@ -38,6 +38,7 @@ class Run:
         self.compare, self.compare_with = [], None
         self.log = []
         self.feed = []            # the log panel: (time, text, status) per line
+        self.specs = None         # the spec sheet: [(section, [(label, value), …]), …]
         self.started_at = self.ended_at = None
 
     def star(self, sid):
@@ -80,6 +81,10 @@ class Run:
                 self.temps.append(e["temp"])
             if (e.get("t") or 0) % 30 == 0 and e.get("t"):
                 self.say(now, f"{'CPU load':<15}{e.get('temp')} °C · {e.get('mhz') or '?'} MHz · {e['t']} s", "run")
+        elif kind == "specs":
+            self.specs = e.get("lines") or None
+            if self.specs:
+                self.say(now, f"{'Spec sheet':<15}Hardware inventory ready: press I to see it", "info")
         elif kind == "log":
             self.log = (self.log + [e.get("text", "")])[-50:]
         elif kind == "done":
@@ -199,6 +204,20 @@ def demo_events():
                 ("storage", 1): {"model": "SAMSUNG MZVLQ512", "size_bytes": 512_110_190_592, "class": "nvme"}}
     yield 0.4, {"e": "start", "mode": "full", "machine": {"sys_vendor": "Acer", "product_name": "Aspire A515-58M"},
                 "steps": [{"id": i, "title": t} for i, t in steps], "minutes": 0.5}
+    yield 0.2, {"e": "specs", "lines": [
+        ["System", [["Computer", "Acer Aspire A515-58M"], ["Board", "RPL Birkin_RTU"], ["BIOS", "Insyde Corp. V1.04 (08/16/2023)"]]],
+        ["Processor", [["Processor", "Intel Core i5-13420H"], ["Cores", "8 cores, 12 threads"], ["Top speed", "4.6 GHz"],
+                       ["L3 cache", "12 MiB"]]],
+        ["Memory", [["Installed", "16 GB · 2 of 2 slots used · up to 32 GB"],
+                    ["DIMM A", "8 GB · DDR4 · SODIMM · 3200 MT/s · Samsung M471A1K43DB1-CWE"],
+                    ["DIMM B", "8 GB · DDR4 · SODIMM · 3200 MT/s · Samsung M471A1K43DB1-CWE"],
+                    ["To add RAM", "DDR4 SODIMM 3200 MT/s · no free slot: replace a stick"]]],
+        ["Storage", [["SSD", "WDC WDS240G2G0A · 240 GB · sata"], ["NVMe SSD", "SAMSUNG MZVLQ512 · 512 GB · nvme"]]],
+        ["Graphics", [["GPU", "Intel Raptor Lake-P UHD Graphics (driver i915)"]]],
+        ["Screen", [["Built-in", "15.5-inch · 1920×1080 · AUO B156HAN02.1"]]],
+        ["Battery", [["Battery", "SMP AP18C8K · Li-ion · 34 of 48 Wh design (71%) · 412 cycles"]]],
+        ["Other devices", [["Network", "Intel Raptor Lake PCH CNVi WiFi"], ["Audio", "Intel Raptor Lake-P/U/H cAVS"],
+                           ["Camera", "ACER FHD User Facing"]]]]}
     for sid, title in steps:
         yield 0.3, {"e": "check", "id": sid}
         if sid == "cpu_load":

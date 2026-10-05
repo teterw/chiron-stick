@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from chiron.advice import todo
+from chiron.specs import lines as spec_lines
 from chiron.model import Status, worst
 
 COLORS = {"green": "#1e8e3e", "yellow": "#e37400", "red": "#d93025", "n/a": "#80868b", "info": "#5f6368"}
@@ -69,6 +70,10 @@ def write_markdown(report, folder):
         lines += ["", f"## Changes since the last check ({report['compare_with']})", "",
                   "| Measurement | Before | Now |", "|---|---|---|"]
         lines += [f"| {c['name']} | {_fmt(c['before'])} | {_fmt(c['after'])} |" for c in report["compare"]]
+    if report.get("specs"):
+        lines += ["", "## Spec sheet", ""]
+        for sec, rows in spec_lines(report["specs"]):
+            lines += [f"**{sec}**", ""] + [f"- {k}: {v}" for k, v in rows] + [""]
     lines += ["", "## Details"]
     for r in report["results"]:
         lines += ["", f"### {r['title']}: {DOT[r['status']]} {r['status']}", "", r["summary"], ""]
@@ -91,6 +96,26 @@ def _badge(status):
     return f'<span class="badge" style="background:{COLORS[status]}"></span>'
 
 
+def spec_table(sheet):
+    e = html.escape
+    return "<table>" + "".join(
+        f"<tr><th colspan=2 style='padding-top:14px'>{e(sec)}</th></tr>"
+        + "".join(f"<tr><td style='width:22%;color:#5f6368'>{e(k)}</td><td>{e(str(v))}</td></tr>" for k, v in rows)
+        for sec, rows in spec_lines(sheet)) + "</table>"
+
+
+def write_spec_sheet(report, folder):
+    """spec-sheet.html: the computer's hardware on one printable page."""
+    if not report.get("specs"):
+        return
+    e = html.escape
+    doc = (f"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+           f"<title>Spec sheet: {e(machine_name(report))}</title><style>{CSS}</style></head><body>"
+           f"<h1>{e(machine_name(report))}</h1><p class=meta>Spec sheet · {e(report['created'][:16].replace('T', ' '))} · "
+           f"Chiron Stick</p>{spec_table(report['specs'])}</body></html>")
+    (folder / "spec-sheet.html").write_text(doc, encoding="utf-8")
+
+
 def write_html(report, folder):
     e = html.escape
     o = report["overall"]
@@ -107,6 +132,9 @@ def write_html(report, folder):
             f"<tr><td class=st style='color:{COLORS[t['status']]}'>{_badge(t['status'])}{e(t['title'])}</td>"
             f"<td>{e(t['action'])}" + (f"<br><span class=ev>Part: {e(t['part'])}</span>" if t.get("part") else "")
             + "</td></tr>" for t in report["todo"]) + "</table>")
+    spec_html = ""
+    if report.get("specs"):
+        spec_html = "<h2>Spec sheet</h2>" + spec_table(report["specs"])
     details = "".join(
         f"<h3>{_badge(r['status'])}{e(r['title'])}</h3><p>{e(r['summary'])}</p><table>"
         + "".join(f"<tr><td>{e(k)}</td><td class=ev>{e(_fmt(v))}</td></tr>" for k, v in r["evidence"].items())
@@ -115,7 +143,7 @@ def write_html(report, folder):
            f"<title>Chiron report: {e(machine_name(report))}</title><style>{CSS}</style></head><body>"
            f"<h1>{e(machine_name(report))}</h1><p class=meta>Chiron Stick report · {e(report['created'])} · Chiron {e(report['chiron'])}</p>"
            f"<p class=overall style='background:{COLORS[o]}'>Overall: {e(o)}</p>{todo_html}"
-           f"<table><tr><th>Area</th><th>Status</th><th>Summary</th></tr>{rows}</table>{comp}<h2>Details</h2>{details}</body></html>")
+           f"<table><tr><th>Area</th><th>Status</th><th>Summary</th></tr>{rows}</table>{comp}{spec_html}<h2>Details</h2>{details}</body></html>")
     (folder / "report.html").write_text(doc, encoding="utf-8")
 
 
@@ -171,8 +199,9 @@ def write_owner_summary(report, folder):
 def write_all(report, folder):
     folder.mkdir(parents=True, exist_ok=True)
     report["overall"] = overall(report["results"])
-    report["todo"] = todo(report["results"])
+    report["todo"] = todo(report["results"], report.get("specs"))
     write_json(report, folder)
     write_markdown(report, folder)
     write_html(report, folder)
     write_owner_summary(report, folder)
+    write_spec_sheet(report, folder)

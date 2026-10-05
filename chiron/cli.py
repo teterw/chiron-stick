@@ -114,6 +114,12 @@ def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=Tr
             machine={k: ident.get(k) for k in ("sys_vendor", "product_name")}, steps=planned,
             minutes=minutes if with_stress else None, quick=quick)
     ev.say(f"Chiron {__version__}: checking {ident.get('sys_vendor') or ''} {ident.get('product_name') or ''}".rstrip())
+    from chiron import specs
+    try:
+        sheet = specs.collect(ctx)
+    except Exception as err:  # noqa: BLE001 - a spec sheet that fails must not stop the check
+        sheet = {"error": str(err)}
+    ev.emit("specs", lines=specs.lines(sheet))
     results = run_all(ctx, only=set(modules), progress=ev.say, on_check=lambda m: ev.emit("check", id=m),
                       on_result=lambda m, r: ev.emit("result", id=m, result=r.to_dict()))
     if with_stress:
@@ -123,7 +129,7 @@ def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=Tr
     fp = history.fingerprint(ident)
     report = {"chiron": __version__, "created": now.isoformat(timespec="seconds"), "fingerprint": fp,
               "machine": {k: v for k, v in ident.items() if v and k not in ("board_serial", "product_uuid")},
-              "results": dicts}
+              "results": dicts, "specs": sheet}
     prev = history.previous(root, fp)
     if prev:
         report["compare"] = history.compare(prev["metrics"], history.metrics(dicts))
