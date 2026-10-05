@@ -134,6 +134,20 @@ class Pacing(unittest.TestCase):
         self.assertEqual(pacer.run.feed[-1][2], "red", "the log ends with the verdict")
 
 
+class DoneAlert(unittest.TestCase):
+    def test_only_long_runs_ring(self):
+        from chiron import doctor
+        run = dm.Run()
+        for i, e in enumerate((START, {"e": "check", "id": "system"}, {"e": "done", "overall": "red", "folder": "/r"})):
+            run.apply(e, now=float(i))
+        self.assertIsNone(doctor.finished_message(run, 20), "a quick check: no alert")
+        title, body = doctor.finished_message(run, 621)
+        self.assertEqual(title, "Check finished")
+        self.assertEqual(body, "Problem found · 3 checks · 10:21")
+        run.phase = "stopped"
+        self.assertEqual(doctor.finished_message(run, 300)[1], "Stopped · 3 checks · 5:00")
+
+
 class Demo(unittest.TestCase):
     def test_demo_is_a_valid_full_run(self):
         run = dm.Run()

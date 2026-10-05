@@ -21,6 +21,33 @@ LOG = Path.home() / ".cache" / "chiron" / "doctor.log"
 VIOLET = (0.545, 0.361, 0.965)  # Chiron violet: the accent when there is no desktop theme
 
 
+ALERT_AFTER = 60  # seconds: runs at least this long announce that they've finished
+
+
+def finished_message(run, took):
+    """(title, body) for the done alert, or None for a run too short to need one."""
+    if took < ALERT_AFTER or run.phase not in ("done", "stopped", "failed"):
+        return None
+    word = {"green": "All good", "yellow": "Worth a look", "red": "Problem found"}.get(run.overall) \
+        if run.phase == "done" else run.phase.title()
+    t = int(took)
+    return "Check finished", f"{word} · {len(run.stars)} checks · {t // 60}:{t % 60:02d}"
+
+
+def alert(title, body):
+    """A desktop notification and the sound theme's "complete" sound, with whatever the system has."""
+    import shutil
+    import subprocess
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "start_new_session": True}
+    if shutil.which("notify-send"):
+        subprocess.Popen(["notify-send", "-a", "Chiron Doctor", "-i", "chiron", title, body], **quiet)
+    sound = Path("/usr/share/sounds/freedesktop/stereo/complete.oga")
+    if shutil.which("canberra-gtk-play"):
+        subprocess.Popen(["canberra-gtk-play", "-i", "complete", "-d", "Chiron Doctor"], **quiet)
+    elif shutil.which("paplay") and sound.exists():
+        subprocess.Popen(["paplay", str(sound)], **quiet)
+
+
 def load_module(name, path):
     loader = SourceFileLoader(name, str(path))
     mod = module_from_spec(spec_from_loader(name, loader))

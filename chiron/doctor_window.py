@@ -15,7 +15,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from chiron import doctor_model as dm  # noqa: E402
-from chiron.doctor import CHIRON, LOG, REPORTS, personal, this_machine  # noqa: E402
+from chiron.doctor import CHIRON, LOG, REPORTS, alert, finished_message, personal, this_machine  # noqa: E402
 from chiron.doctor_scene import MENU, Scene  # noqa: E402
 
 
@@ -37,6 +37,7 @@ class Doctor(Gtk.Window):
         self.waiting = None       # since when we wait for the password dialog
         self.demo_iter = None
         self.last_draw = 0.0
+        self.alerted = False
         area = Gtk.DrawingArea()
         area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
         area.connect("draw", self.on_draw)
@@ -46,6 +47,7 @@ class Doctor(Gtk.Window):
         self.area = area
         self.connect("key-press-event", self.on_key)
         self.connect("destroy", self.on_destroy)
+        self.connect("focus-in-event", lambda *a: self.set_urgency_hint(False))
         self.add_tick_callback(self.tick)
 
     @property
@@ -60,6 +62,7 @@ class Doctor(Gtk.Window):
         self.scene.detail = None
         self.pacer = dm.Pacer()
         self.truth = dm.Run()
+        self.alerted = False
         if self.demo:
             self.play(dm.demo_events())
             return
@@ -242,6 +245,14 @@ class Doctor(Gtk.Window):
     def tick(self, _w, _clock):
         now = time.monotonic()
         self.pacer.update(now)
+        if not self.alerted and self.run.phase in ("done", "stopped", "failed"):
+            self.alerted = True
+            took = (self.truth.ended_at or now) - (self.truth.started_at or now)
+            msg = finished_message(self.run, took)
+            if msg:  # a long run: say it's finished, in case nobody is watching
+                alert(*msg)
+                if not self.is_active():
+                    self.set_urgency_hint(True)
         # under a stress test: fewer frames, so the window doesn't take CPU time from the test
         if now - self.last_draw >= (0.125 if self.truth.under_load() else 0.0):
             self.area.queue_draw()
