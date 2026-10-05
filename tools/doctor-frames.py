@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--fps", type=float, default=30)
     ap.add_argument("--at")
     ap.add_argument("--video", action="store_true")
+    ap.add_argument("--detail", help="open this node's findings (e.g. storage)")
     a = ap.parse_args()
     W, H = (int(v) for v in a.size.split("x"))
     out = Path(a.out)
@@ -60,6 +61,7 @@ def main():
         want = times is None or any(abs(now - x) < 0.5 / a.fps for x in times)
         if want:
             cr = cairo.Context(surf)
+            scene.detail = a.detail if a.detail and pacer.run.star(a.detail) else None
             scene.render(cr, W, H, now, run)
             name = f"t{now:06.2f}.png" if times else f"f{frame:05d}.png"
             surf.write_to_png(str(out / name))

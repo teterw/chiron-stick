@@ -26,6 +26,7 @@ from gi.repository import Pango, PangoCairo  # noqa: E402
 from PIL import Image, ImageFilter, ImageOps  # noqa: E402
 
 from chiron import doctor_model as dm  # noqa: E402
+from chiron.advice import todo_for  # noqa: E402
 from chiron.checks import MODULES, TITLES  # noqa: E402
 
 SANS = "Noto Sans, Inter, Cantarell, sans-serif"
@@ -608,21 +609,26 @@ class Scene:
     # ------------------------------------------------ a node's findings
 
     def details(self, cr, W, H, s, run, cx, cy):
+        """A node's findings, each with what to do about it and the part to look for."""
         st = run.star(self.detail)
         if not st:
             self.detail = None
             return
         cr.set_source_rgba(*BG, 0.55)
         cr.paint()
-        w = 580 * s
-        h = (60 + 50 * len(st.results)) * s
-        x, y = cx - w / 2, cy - h / 2
+        rows = []
+        for r in st.results:
+            t = todo_for(r)
+            rows.append((r, t, 42 + (20 if t else 0) + (18 if t and t.get("part") else 0) + 10))
+        w = 620 * s
+        h = (60 + sum(hh for _, _, hh in rows)) * s
+        x, y = cx - w / 2, max(20 * s, cy - h / 2)
         self.box(cr, x, y, w, h, fill_a=0.98, line_a=0.14, r=10 * s)
         self.text(cr, st.title, x + 22 * s, y + 18 * s, 15 * s, FG, weight="Semi-Bold")
         self.chip(cr, status_of(st), x + w - 22 * s, y + 20 * s, s, align="right")
         self.hline(cr, x + 1, x + w - 1, y + 50 * s, 0.07)
         yy = y + 62 * s
-        for r in st.results:
+        for r, t, hh in rows:
             status = (r.get("status") or "info").replace("n/a", "na")
             cr.set_source_rgba(*colour(status, self.scan), 1)
             cr.new_path()
@@ -630,5 +636,9 @@ class Scene:
             cr.fill()
             self.text(cr, r.get("title", ""), x + 40 * s, yy, 13 * s, FG, weight="Medium", width=w - 70 * s)
             self.text(cr, r.get("summary", ""), x + 40 * s, yy + 19 * s, 12 * s, SUB, width=w - 70 * s)
-            yy += 50 * s
+            if t:
+                self.text(cr, "→ " + t["action"], x + 40 * s, yy + 40 * s, 12 * s, FG, width=w - 70 * s)
+                if t.get("part"):
+                    self.text(cr, f"Part: {t['part']}", x + 40 * s, yy + 59 * s, 11.5 * s, SUB, font=MONO, width=w - 70 * s)
+            yy += hh * s
         self.hits.append((0, 0, W, H, "detail:close"))

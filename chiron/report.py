@@ -5,6 +5,7 @@ import html
 import json
 from pathlib import Path
 
+from chiron.advice import todo
 from chiron.model import Status, worst
 
 COLORS = {"green": "#1e8e3e", "yellow": "#e37400", "red": "#d93025", "n/a": "#80868b", "info": "#5f6368"}
@@ -55,7 +56,13 @@ def write_markdown(report, folder):
     o = report["overall"]
     lines = [f"# Chiron Stick report: {machine_name(report)}", "",
              f"Created {report['created']} with Chiron {report['chiron']}", "",
-             f"**Overall: {DOT[o]} {o}**", "", "| Area | Status | Summary |", "|---|---|---|"]
+             f"**Overall: {DOT[o]} {o}**", ""]
+    if report.get("todo"):
+        lines += ["## What to do", ""]
+        lines += [f"- {DOT[t['status']]} **{t['title']}**: {t['action']}" + (f" Part: {t['part']}." if t.get("part") else "")
+                  for t in report["todo"]]
+        lines += [""]
+    lines += ["| Area | Status | Summary |", "|---|---|---|"]
     for r in report["results"]:
         lines.append(f"| {r['title']} | {DOT[r['status']]} {r['status']} | {r['summary'].replace('|', '/')} |")
     if report.get("compare"):
@@ -94,6 +101,12 @@ def write_html(report, folder):
         comp = (f"<h2>Changes since the last check ({e(report['compare_with'])})</h2><table><tr><th>Measurement</th><th>Before</th><th>Now</th></tr>"
                 + "".join(f"<tr><td>{e(c['name'])}</td><td>{e(_fmt(c['before']))}</td><td>{e(_fmt(c['after']))}</td></tr>" for c in report["compare"])
                 + "</table>")
+    todo_html = ""
+    if report.get("todo"):
+        todo_html = ("<h2>What to do</h2><table>" + "".join(
+            f"<tr><td class=st style='color:{COLORS[t['status']]}'>{_badge(t['status'])}{e(t['title'])}</td>"
+            f"<td>{e(t['action'])}" + (f"<br><span class=ev>Part: {e(t['part'])}</span>" if t.get("part") else "")
+            + "</td></tr>" for t in report["todo"]) + "</table>")
     details = "".join(
         f"<h3>{_badge(r['status'])}{e(r['title'])}</h3><p>{e(r['summary'])}</p><table>"
         + "".join(f"<tr><td>{e(k)}</td><td class=ev>{e(_fmt(v))}</td></tr>" for k, v in r["evidence"].items())
@@ -101,7 +114,7 @@ def write_html(report, folder):
     doc = (f"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
            f"<title>Chiron report: {e(machine_name(report))}</title><style>{CSS}</style></head><body>"
            f"<h1>{e(machine_name(report))}</h1><p class=meta>Chiron Stick report · {e(report['created'])} · Chiron {e(report['chiron'])}</p>"
-           f"<p class=overall style='background:{COLORS[o]}'>Overall: {e(o)}</p>"
+           f"<p class=overall style='background:{COLORS[o]}'>Overall: {e(o)}</p>{todo_html}"
            f"<table><tr><th>Area</th><th>Status</th><th>Summary</th></tr>{rows}</table>{comp}<h2>Details</h2>{details}</body></html>")
     (folder / "report.html").write_text(doc, encoding="utf-8")
 
@@ -116,6 +129,7 @@ table{border-collapse:collapse;width:100%} td{border-bottom:1px solid #e0e0e0;pa
 .lab{font-weight:600;width:28%} .lab .en,.msg .en{color:#5f6368;font-weight:400;font-size:.88em;display:block;margin-top:2px}
 .st{font-size:.8em;font-weight:700;white-space:nowrap}
 .foot{color:#5f6368;font-size:.8em;margin-top:16px}
+.parts{border:1px solid #e0e0e0;border-radius:10px;padding:10px 14px;margin-top:14px} .parts ul{margin:6px 0 0;padding-left:4px;list-style:none} .parts li{margin:3px 0}
 @media print{body{margin:0;max-width:none}}
 """
 
@@ -130,6 +144,12 @@ def write_owner_summary(report, folder):
     e = html.escape
     th, en = catalog("th"), catalog("en")
     o = report["overall"]
+    parts = [t for t in report.get("todo", []) if t.get("part")]
+    parts_html = ""
+    if parts:
+        parts_html = (f"<div class=parts><b>{e(th['ui.parts'])} · {e(en['ui.parts'])}</b><ul>"
+                      + "".join(f"<li><span class=dot style='background:{COLORS[t['status']]};width:10px;height:10px'></span> "
+                                f"{e(t['part'])}</li>" for t in parts) + "</ul></div>")
     rows = ""
     for status, key, params in owner_lines(report):
         area = key.split(".")[0]
@@ -143,7 +163,7 @@ def write_owner_summary(report, folder):
            f"<p class=sub>{e(th['ui.machine'])} / {e(en['ui.machine'])}: <b>{e(machine_name(report))}</b> · "
            f"{e(th['ui.checked'])} / {e(en['ui.checked'])} {e(report['created'][:16].replace('T', ' '))}</p>"
            f"<div class=overall style='background:{COLORS[o]}'><div class=th>{e(th['overall.' + o])}</div>"
-           f"<div>{e(en['overall.' + o])}</div></div><table>{rows}</table>"
+           f"<div>{e(en['overall.' + o])}</div></div><table>{rows}</table>{parts_html}"
            f"<p class=foot>{e(th['ui.footer'])}<br>{e(en['ui.footer'])}</p></body></html>")
     (folder / "owner-summary.html").write_text(doc, encoding="utf-8")
 
@@ -151,6 +171,7 @@ def write_owner_summary(report, folder):
 def write_all(report, folder):
     folder.mkdir(parents=True, exist_ok=True)
     report["overall"] = overall(report["results"])
+    report["todo"] = todo(report["results"])
     write_json(report, folder)
     write_markdown(report, folder)
     write_html(report, folder)

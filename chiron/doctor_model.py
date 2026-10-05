@@ -5,6 +5,7 @@ import json
 from collections import deque
 from pathlib import Path
 
+from chiron.advice import todo
 from chiron.model import Status, worst
 
 STRESS_STEPS = {"cpu_load", "ram", "gpu"}  # slow steps: the window redraws less while they run
@@ -86,6 +87,8 @@ class Run:
             self.phase, self.ended_at = "done", now
             self.overall, self.folder = e.get("overall"), e.get("folder")
             self.compare, self.compare_with = e.get("compare") or [], e.get("compare_with")
+            for t in todo([r for st in self.stars for r in st.results])[:4]:
+                self.say(now, f"{'To do':<15}{t['action']}" + (f" Part: {t['part']}." if t.get("part") else ""), t["status"])
             for c in self.compare[:3]:
                 self.say(now, f"{'Since last':<15}{c.get('name')}: {c.get('before')} → {c.get('after')}", "info")
             self.say(now, f"{'Diagnosis':<15}{ {'green': 'All good', 'yellow': 'Worth a look', 'red': 'Problem found'}.get(self.overall, self.overall)}", self.overall or "info")
@@ -191,6 +194,9 @@ def demo_events():
              "devices": [("green", "every device has a working driver")], "diskspace": [("yellow", "Windows: 9% free (21 GB)")],
              "win11": [("green", "ready: TPM 2.0, Secure Boot, supported CPU")],
              "ram": [("green", "memtester pass, no errors")], "gpu": [("green", "Intel UHD: glmark2 score 2140")]}
+    evidence = {("battery", 0): {"manufacturer": "SMP", "model": "AP18C8K", "technology": "Li-ion", "unit": "Wh", "design": 48.0},
+                ("storage", 0): {"model": "WDC WDS240G2G0A", "size_bytes": 240_057_409_536, "class": "ssd", "transport": "sata"},
+                ("storage", 1): {"model": "SAMSUNG MZVLQ512", "size_bytes": 512_110_190_592, "class": "nvme"}}
     yield 0.4, {"e": "start", "mode": "full", "machine": {"sys_vendor": "Acer", "product_name": "Aspire A515-58M"},
                 "steps": [{"id": i, "title": t} for i, t in steps], "minutes": 0.5}
     for sid, title in steps:
@@ -202,8 +208,10 @@ def demo_events():
             yield 0.1, {"e": "result", "id": sid, "result": {"area": "cpu_load", "title": title, "status": "green",
                                                             "summary": "30 s of full load; max 85 °C (limit 100 °C); clock 3396 → 3280 MHz"}}
             continue
-        for status, summary in found.get(sid, []):
-            yield 0.9, {"e": "result", "id": sid, "result": {"area": sid, "title": title, "status": status, "summary": summary}}
+        for k, (status, summary) in enumerate(found.get(sid, [])):
+            ev = evidence.get((sid, k), {})
+            yield 0.9, {"e": "result", "id": sid, "result": {"area": sid, "title": title, "status": status, "summary": summary,
+                                                            "evidence": ev}}
     yield 0.6, {"e": "done", "overall": "red", "folder": "", "compare_with": "2026-09-12 10:05",
                 "compare": [{"name": "CPU max temperature", "before": "96 °C", "after": "85 °C"},
                             {"name": "Battery health", "before": "74%", "after": "71%"}]}

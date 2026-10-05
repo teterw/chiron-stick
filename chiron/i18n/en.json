@@ -5,6 +5,7 @@
   "ui.area": "Area",
   "ui.result": "Result",
   "ui.footer": "Checked with Chiron Stick. This is a snapshot of today, not a guarantee: drives and batteries can fail without warning.",
+  "ui.parts": "Parts to get",
   "ui.status.green": "OK",
   "ui.status.yellow": "Attention",
   "ui.status.red": "Problem",
