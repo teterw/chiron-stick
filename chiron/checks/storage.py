@@ -51,6 +51,54 @@ def ata_endurance_used(smart):
     return None
 
 
+ATA_NAMES = {1: "Raw read error rate", 3: "Spin up time", 4: "Start/stop count", 5: "Reallocated sectors",
+             7: "Seek error rate", 9: "Power-on hours", 10: "Spin retry count", 12: "Power cycles",
+             173: "Erase count", 174: "Unexpected power loss", 177: "Wear levelling count",
+             187: "Reported uncorrectable errors", 188: "Command timeouts", 190: "Airflow temperature",
+             192: "Unsafe shutdowns", 194: "Temperature", 196: "Reallocation events",
+             197: "Current pending sectors", 198: "Offline uncorrectable sectors", 199: "Cable (CRC) errors",
+             231: "SSD life left", 233: "Media wearout indicator", 241: "Total written (LBAs)", 242: "Total read (LBAs)"}
+ATA_BAD = {197, 198}                 # any at all: sectors that can't be read
+ATA_WATCH = {187, 188, 199, 10, 196}  # any at all: worth watching
+
+
+def smart_table(smart):
+    """Every SMART value worth showing, as [{"name", "value", "detail", "level"}], level being bad,
+    watch or ok by the same rules as the grading; the worrying rows come first."""
+    rows = []
+    for a in smart.get("ata_smart_attributes", {}).get("table", []):
+        aid, raw = a.get("id"), a.get("raw", {}).get("value")
+        name = ATA_NAMES.get(aid) or (a.get("name") or f"Attribute {aid}").replace("_", " ").capitalize()
+        level = "ok"
+        if a.get("when_failed") or (a.get("thresh") and a.get("value") is not None and a["value"] <= a["thresh"]):
+            level = "bad"
+        elif raw and aid in ATA_BAD:
+            level = "bad"
+        elif raw and aid == 5:
+            level = "bad" if raw > 10 else "watch"
+        elif raw and aid in ATA_WATCH:
+            level = "watch"
+        value = a.get("raw", {}).get("string", str(raw)).split(" ")[0] + " °C" if aid in (194, 190) else str(raw)
+        rows.append({"name": name, "value": value, "level": level,
+                     "detail": f"normalised {a.get('value')}, worst {a.get('worst')}, threshold {a.get('thresh')}"})
+    log = smart.get("nvme_smart_health_information_log")
+    if log:
+        def add(key, name, fmt="{}", level="ok"):
+            if key in log:
+                rows.append({"name": name, "value": fmt.format(log[key]), "level": level, "detail": key})
+        used, spare, thr = log.get("percentage_used"), log.get("available_spare"), log.get("available_spare_threshold")
+        add("critical_warning", "Critical warning", level="bad" if log.get("critical_warning") else "ok")
+        add("percentage_used", "Endurance used", "{}%", "bad" if used and used > 100 else "watch" if used and used >= 80 else "ok")
+        add("available_spare", "Available spare", "{}%", "bad" if spare is not None and thr is not None and spare < thr else "ok")
+        add("media_errors", "Media errors", level="bad" if log.get("media_errors") else "ok")
+        add("num_err_log_entries", "Error log entries")
+        add("power_on_hours", "Power-on hours")
+        add("unsafe_shutdowns", "Unsafe shutdowns")
+        add("temperature", "Temperature", "{} °C", "watch" if (log.get("temperature") or 0) > 70 else "ok")
+    order = {"bad": 0, "watch": 1, "ok": 2}
+    return sorted(rows, key=lambda r: order[r["level"]])
+
+
 def drive_class(smart, disk):
     if smart.get("device", {}).get("protocol") == "NVMe" or disk["name"].startswith("nvme"):
         return "nvme"
@@ -189,6 +237,9 @@ def run(ctx):
         summary = ", ".join(reasons) if reasons else "healthy"
         if speed:
             summary += f"; reads {speed} MB/s" + (" (over USB)" if d.get("tran") == "usb" else "")
+        table = smart_table(smart)
+        if table:
+            ev["smart_table"] = table
         ev.update({"device": dev, "model": d.get("model"), "size_bytes": d["size"], "class": cls,
                    "transport": d.get("tran"), "temperature_c": temp, "read_mbps": speed, "speed_error": err,
                    # salted hash of the serial: matches the same drive across runs without storing the serial

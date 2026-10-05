@@ -116,6 +116,26 @@ class Pacing(unittest.TestCase):
         pacer.update(dm.Pacer.INTRO + 0.01)
         self.assertEqual(pacer.run.temps, [70])
 
+    def test_samples_replay_with_their_own_rhythm(self):
+        """A disk scan's samples that arrive while the screen is still busy are not dumped all at
+        once: they play back with the spacing they arrived with, shifted by the delay."""
+        pacer = dm.Pacer()
+        pacer.push(START, at=0.0)
+        pacer.push({"e": "check", "id": "storage"}, at=0.0)
+        for i in range(10):  # one sample every 0.5 s, from 0.0 s
+            pacer.push({"e": "scan", "id": "disk_scan", "disk": "sda", "i": i, "n": 10, "mbps": 500, "pos": i / 9}, at=0.5 * i)
+        pacer.update(0.0)
+        shown = []
+        t = 0.0
+        while t < 10:
+            t += 0.05
+            for e in pacer.update(t):
+                if e["e"] == "scan":
+                    shown.append(round(t, 2))
+        gaps = [round(b - a, 2) for a, b in zip(shown, shown[1:])]
+        self.assertTrue(all(abs(g - 0.5) < 0.06 for g in gaps), gaps)
+        self.assertAlmostEqual(shown[0], dm.Pacer.INTRO, delta=0.06, msg="they wait for their step, then keep time")
+
     def test_stop_shows_at_once(self):
         pacer = self.burst()
         pacer.queue.pop()  # no done: stopped instead

@@ -20,7 +20,8 @@ from chiron.util import desktop_user, is_root, own_disks
 HELP = """Chiron Stick: a portable PC doctor.
 
   chiron doctor                       the doctor launcher: run every check from one window
-  chiron report [--quick]             read-only health check (about 3 minutes; --quick skips the disk speed test)
+  chiron report [--quick]             read-only health check
+  chiron disk-scan                    read samples across every drive (read-only): finds slow or unreadable areas (about 3 minutes; --quick skips the disk speed test)
   chiron stress [--minutes 10]        load tests with live safety limits (--no-gpu, --no-ram)
   chiron full [--minutes 10]          report + stress + one combined verdict
   chiron compare [machine]            what changed since this machine's previous check
@@ -95,7 +96,7 @@ def unique_folder(folder):
     return out
 
 
-def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=True, ram=True, ev=None):
+def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=True, ram=True, ev=None, with_scan=False):
     """ev: an Events stream (chiron --events, for the doctor launcher) instead of text."""
     from chiron import checks
     from chiron.stress import STEPS, stress
@@ -108,9 +109,11 @@ def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=Tr
     ctx = Context(raw_dir=folder / "raw", quick=quick, own=own_disks())
     modules = checks.MODULES if with_report else ["system"]
     planned = [{"id": m, "title": TITLES[m]} for m in modules]
+    if with_scan:
+        planned.append({"id": "disk_scan", "title": "Disk scan"})
     if with_stress:
         planned += [{"id": k, "title": STEPS[k]} for k in stress_steps(gpu=gpu, ram=ram)]
-    ev.emit("start", mode="full" if with_report and with_stress else "stress" if with_stress else "report",
+    ev.emit("start", mode="full" if with_report and with_stress else "stress" if with_stress else "scan" if with_scan else "report",
             machine={k: ident.get(k) for k in ("sys_vendor", "product_name")}, steps=planned,
             minutes=minutes if with_stress else None, quick=quick)
     ev.say(f"Chiron {__version__}: checking {ident.get('sys_vendor') or ''} {ident.get('product_name') or ''}".rstrip())
@@ -122,6 +125,13 @@ def collect(with_report=True, with_stress=False, quick=False, minutes=10, gpu=Tr
     ev.emit("specs", lines=specs.lines(sheet))
     results = run_all(ctx, only=set(modules), progress=ev.say, on_check=lambda m: ev.emit("check", id=m),
                       on_result=lambda m, r: ev.emit("result", id=m, result=r.to_dict()))
+    if with_scan:
+        from chiron import disk_scan
+        ev.say("Disk scan:")
+        ev.emit("check", id="disk_scan")
+        for r in disk_scan.run(ctx, emit=ev.emit):
+            ev.emit("result", id="disk_scan", result=r.to_dict())
+            results.append(r)
     if with_stress:
         ev.say("Stress tests:")
         results += stress(ctx, minutes=minutes, gpu=gpu, ram=ram, progress=ev.say, emit=ev.emit)
@@ -221,6 +231,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd")
     d = sub.add_parser("doctor"); d.add_argument("--demo", action="store_true")
     r = sub.add_parser("report"); r.add_argument("--quick", action="store_true")
+    sub.add_parser("disk-scan")
     for name in ("stress", "full"):
         s = sub.add_parser(name)
         s.add_argument("--minutes", type=float, default=10)
@@ -242,15 +253,17 @@ def main(argv=None):
     if args.cmd == "doctor":
         from chiron import doctor  # GTK: only imported for the window, never for the checks
         return doctor.main(demo=args.demo)
-    if args.cmd in ("report", "stress", "full", "compare", "mount-ro", "umount"):
+    if args.cmd in ("report", "stress", "full", "disk-scan", "compare", "mount-ro", "umount"):
         ensure_root(argv)
     ev = None
-    if args.events and args.cmd in ("report", "stress", "full"):
+    if args.events and args.cmd in ("report", "stress", "full", "disk-scan"):
         from chiron import events
         ev = events.start()
     try:
         if args.cmd == "report":
             return collect(quick=args.quick, ev=ev)
+        if args.cmd == "disk-scan":
+            return collect(with_report=False, with_scan=True, ev=ev)
         if args.cmd in ("stress", "full"):
             return collect(with_report=args.cmd == "full", with_stress=True, quick=args.quick,
                            minutes=args.minutes, gpu=not args.no_gpu, ram=not args.no_ram, ev=ev)

@@ -85,7 +85,7 @@ class Doctor(Gtk.Window):
         if e.get("e") == "start":
             self.waiting = None
         self.truth.apply(e, now)
-        self.pacer.push(e)
+        self.pacer.push(e, at=now)
 
     def on_output(self, _fd, _cond):
         line = self.proc.stdout.readline() if self.proc else ""
@@ -225,7 +225,7 @@ class Doctor(Gtk.Window):
             elif phase == "idle" and not self.proc:
                 self.destroy()
         elif phase == "idle" and not self.proc:
-            if name in ("1", "2", "3", "4", "KP_1", "KP_2", "KP_3", "KP_4"):
+            if name in ("1", "2", "3", "4", "5", "KP_1", "KP_2", "KP_3", "KP_4", "KP_5"):
                 self.act(f"menu:{int(name[-1]) - 1}")
             elif name in ("Up", "k"):
                 self.scene.menu_sel = (self.scene.menu_sel - 1) % len(MENU)

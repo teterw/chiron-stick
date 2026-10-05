@@ -61,6 +61,13 @@ def _win11(r, red):
     return text[:1].upper() + text[1:] + ".", None
 
 
+def _disk_scan(r, red):
+    _action, part = _storage(r, True)
+    if red:
+        return "Back up the owner's files now: parts of the drive can't be read. Then replace the drive.", part
+    return "Some areas of the drive read slowly: back up important files and recheck in a few months.", part
+
+
 def _gpu(r, red):
     if red:
         return "The graphics test crashed or hung: check the cooling and the drivers in the owner's own system.", None
@@ -70,6 +77,7 @@ def _gpu(r, red):
 ADVICE = {
     "battery": _battery,
     "storage": _storage,
+    "disk_scan": _disk_scan,
     "win11": _win11,
     "diskspace": lambda r, red: ("Free up space: empty the Recycle Bin, remove programs nobody uses, and move photos "
                                  "and videos to an external drive.", None),

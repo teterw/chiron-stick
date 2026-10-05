@@ -54,7 +54,8 @@ def main():
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
     while True:
         while arrivals and arrivals[0][0] <= now:
-            pacer.push(arrivals.pop(0)[1])
+            at, e = arrivals.pop(0)
+            pacer.push(e, at=at)
         pacer.update(now)
         run = pacer.run
         if run.phase == "done" and end is None:

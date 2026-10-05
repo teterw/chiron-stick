@@ -96,6 +96,32 @@ def _badge(status):
     return f'<span class="badge" style="background:{COLORS[status]}"></span>'
 
 
+def smart_html(rows):
+    e = html.escape
+    col = {"bad": COLORS["red"], "watch": COLORS["yellow"], "ok": "#202124"}
+    return ("<table><tr><th>SMART</th><th>Value</th><th class=ev>Details</th></tr>"
+            + "".join(f"<tr><td style='color:{col[x['level']]}'>{e(x['name'])}</td><td style='color:{col[x['level']]}'>"
+                      f"{e(x['value'])}</td><td class=ev>{e(x.get('detail', ''))}</td></tr>" for x in rows) + "</table>")
+
+
+def scan_svg(curve, w=640, h=90):
+    """The disk scan's read speed from the start of the drive to its end; unreadable areas in red."""
+    speeds = sorted(v for v in curve if v)
+    if not speeds:
+        return ""
+    top, n = max(speeds[-1], 1), len(curve)
+    bars = []
+    for i, v in enumerate(curve):
+        x = i * w / n
+        if v is None:
+            bars.append(f"<rect x='{x:.1f}' y='0' width='{w / n:.1f}' height='{h}' fill='{COLORS['red']}'/>")
+        else:
+            bh = v / top * (h - 4)
+            bars.append(f"<rect x='{x:.1f}' y='{h - bh:.1f}' width='{max(w / n - .4, .6):.1f}' height='{bh:.1f}' fill='#5f6368'/>")
+    return (f"<svg viewBox='0 0 {w} {h}' width='100%' style='max-width:{w}px;background:#f8f9fa'>{''.join(bars)}</svg>"
+            f"<p class=ev>Read speed from the start of the drive (left) to its end (right); peak {speeds[-1]:.0f} MB/s</p>")
+
+
 def spec_table(sheet):
     e = html.escape
     return "<table>" + "".join(
@@ -136,9 +162,12 @@ def write_html(report, folder):
     if report.get("specs"):
         spec_html = "<h2>Spec sheet</h2>" + spec_table(report["specs"])
     details = "".join(
-        f"<h3>{_badge(r['status'])}{e(r['title'])}</h3><p>{e(r['summary'])}</p><table>"
-        + "".join(f"<tr><td>{e(k)}</td><td class=ev>{e(_fmt(v))}</td></tr>" for k, v in r["evidence"].items())
-        + "</table>" for r in report["results"])
+        f"<h3>{_badge(r['status'])}{e(r['title'])}</h3><p>{e(r['summary'])}</p>"
+        + (scan_svg(r["evidence"]["curve"]) if r["evidence"].get("curve") else "")
+        + "<table>" + "".join(f"<tr><td>{e(k)}</td><td class=ev>{e(_fmt(v))}</td></tr>" for k, v in r["evidence"].items()
+                              if k not in ("smart_table", "curve"))
+        + "</table>" + (smart_html(r["evidence"]["smart_table"]) if r["evidence"].get("smart_table") else "")
+        for r in report["results"])
     doc = (f"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
            f"<title>Chiron report: {e(machine_name(report))}</title><style>{CSS}</style></head><body>"
            f"<h1>{e(machine_name(report))}</h1><p class=meta>Chiron Stick report · {e(report['created'])} · Chiron {e(report['chiron'])}</p>"

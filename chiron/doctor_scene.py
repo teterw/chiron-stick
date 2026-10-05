@@ -44,7 +44,8 @@ WORDS = {"green": "All good", "yellow": "Worth a look", "red": "Problem found"}
 MENU = [("Health check", "~3 min", ["report"], "Every check, read-only"),
         ("Quick check", "~1 min", ["report", "--quick"], "Skips the disk speed test"),
         ("Stress test", "10 min", ["stress"], "CPU, RAM and graphics under full load"),
-        ("Check + stress", "~13 min", ["full"], "Everything, one combined verdict")]
+        ("Check + stress", "~13 min", ["full"], "Everything, one combined verdict"),
+        ("Disk scan", "~1–2 min", ["disk-scan"], "Reads every part of each drive, read-only")]
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TAU = 2 * math.pi
 SCAN_CYAN = (0.38, 0.78, 0.95)
@@ -199,7 +200,7 @@ class Scene:
         cr.set_source_surface(self.bg, 0, 0)
         cr.paint()
         self.hits = []
-        gap = 0.0 if self.last_seen is None else max(0.0, now - self.last_seen)  # any gap, also long ones
+        gap = 99.0 if self.last_seen is None else max(0.0, now - self.last_seen)  # first frame: jump straight there
         self.last_seen = now
         self.shown += (run.progress() - self.shown) * clamp(gap * 3)
         pad = 28 * s
@@ -505,13 +506,43 @@ class Scene:
         self.caption(cr, "Checking", cx, cy + 14 * s, s, SUB, align="center")
         self.text(cr, cur.title if cur else "Starting", cx, cy + 30 * s, 13 * s, FG, weight="Medium", align="center",
                   width=150 * s)
+        if run.current == "disk_scan" and run.scan:
+            disk = run.scan_now.get("disk") or next(iter(run.scan))
+            pts = run.scan.get(disk, [])
+            last = next((m for _p, m, _e in reversed(pts) if m), None)
+            line = f"{disk}  ·  {last:.0f} MB/s" if last else disk
+            self.text(cr, line, cx, cy + r + 26 * s, 11.5 * s, SUB, font=MONO, align="center")
+            self.scan_graph(cr, s, pts, cx, cy + r + 44 * s, 300 * s, 30 * s)
         live = run.live
         if run.current == "cpu_load" and live and live.get("t"):
             left = max(0, (live.get("total") or 0) - (live.get("t") or 0))
             clk = f"{live['mhz'] / 1000:.2f} GHz" if live.get("mhz") else "? GHz"
             line = f"{live.get('temp', '?')} °C  ·  {clk}  ·  {left // 60}:{left % 60:02d} left"
             self.text(cr, line, cx, cy + r + 26 * s, 11.5 * s, SUB, font=MONO, align="center")
-            self.trace(cr, s, run, cx, cy + r + 50 * s, 260 * s, 34 * s)
+            self.trace(cr, s, run, cx, cy + r + 44 * s, 260 * s, 30 * s)
+
+    def scan_graph(self, cr, s, pts, cx, top, w, h):
+        """Read speed across the drive: one bar per sample, from the start of the drive to its end.
+        Unreadable areas are red bars, slow ones (under 30% of the median) amber."""
+        if not pts:
+            return
+        speeds = sorted(m for _p, m, _e in pts if m)
+        med = speeds[len(speeds) // 2] if speeds else 1
+        top_v = max(speeds[-1] if speeds else 1, med * 1.3)
+        x0 = cx - w / 2
+        self.hline(cr, x0, x0 + w, top + h, 0.10)
+        bw = max(1.0, w / 200 - 0.5 * s)
+        for pos, mbps, err in pts:
+            x = x0 + pos * (w - bw)
+            if err:
+                cr.set_source_rgba(*VERDICT["red"], 0.95)
+                cr.rectangle(x, top, bw, h)
+            else:
+                v = (mbps or 0) / top_v
+                slow = mbps is not None and mbps < 0.3 * med
+                cr.set_source_rgba(*(VERDICT["yellow"] if slow else self.scan), 0.9 if slow else 0.75)
+                cr.rectangle(x, top + h - v * h, bw, v * h)
+            cr.fill()
 
     def trace(self, cr, s, run, cx, top, w, h):
         """CPU temperature during the stress test, against the CPU's own limit (dashed)."""
@@ -571,7 +602,7 @@ class Scene:
         if waiting:
             lines.append((waiting, f"{'Password':<15}Waiting for your password {SPINNER[int(now * 10) % len(SPINNER)]}", "run"))
         if not lines:
-            lines = [(None, f"{'Ready':<15}Choose a check: keys 1–4, or click", "info")]
+            lines = [(None, f"{'Ready':<15}Choose a check: keys 1–5, or click", "info")]
         lines = lines[-rows:]
         y = top + 38 * s
         x0 = pad + 18 * s
@@ -598,6 +629,7 @@ class Scene:
         if run.specs and run.phase != "idle":
             cmds.append(("I", "Spec sheet", "cmd:specs"))
         y = top + 38 * s
+        step = min(32 * s, (bottom - top - 44 * s) / max(1, len(cmds)))
         for key, label, action in cmds:
             hov = self.hover == action
             if hov:
@@ -609,7 +641,7 @@ class Scene:
             self.text(cr, key, split + 18 * s + kw / 2, y + 2.5 * s, 11 * s, FG, font=MONO, align="center")
             self.text(cr, label, split + 18 * s + kw + 12 * s, y + 1.5 * s, 13 * s, FG if hov else (0.82, 0.83, 0.86))
             self.hits.append((split + 8 * s, y - 4 * s, W - pad - split - 16 * s, 28 * s, action))
-            y += 32 * s
+            y += step
 
     # ------------------------------------------------ the spec sheet
 
@@ -660,7 +692,8 @@ class Scene:
         rows = []
         for r in st.results:
             t = todo_for(r)
-            rows.append((r, t, 42 + (20 if t else 0) + (18 if t and t.get("part") else 0) + 10))
+            smart = [x for x in (r.get("evidence") or {}).get("smart_table", [])][:6]
+            rows.append((r, t, 42 + (20 if t else 0) + (18 if t and t.get("part") else 0) + (8 + 17 * len(smart) if smart else 0) + 10))
         w = 620 * s
         h = (60 + sum(hh for _, _, hh in rows)) * s
         x, y = cx - w / 2, max(20 * s, cy - h / 2)
@@ -677,9 +710,20 @@ class Scene:
             cr.fill()
             self.text(cr, r.get("title", ""), x + 40 * s, yy, 13 * s, FG, weight="Medium", width=w - 70 * s)
             self.text(cr, r.get("summary", ""), x + 40 * s, yy + 19 * s, 12 * s, SUB, width=w - 70 * s)
+            ty = yy + 40 * s
             if t:
-                self.text(cr, "→ " + t["action"], x + 40 * s, yy + 40 * s, 12 * s, FG, width=w - 70 * s)
+                self.text(cr, "→ " + t["action"], x + 40 * s, ty, 12 * s, FG, width=w - 70 * s)
+                ty += 20 * s
                 if t.get("part"):
-                    self.text(cr, f"Part: {t['part']}", x + 40 * s, yy + 59 * s, 11.5 * s, SUB, font=MONO, width=w - 70 * s)
+                    self.text(cr, f"Part: {t['part']}", x + 40 * s, ty - 1 * s, 11.5 * s, SUB, font=MONO, width=w - 70 * s)
+                    ty += 18 * s
+            smart = (r.get("evidence") or {}).get("smart_table", [])[:6]
+            if smart:
+                ty += 6 * s
+                for row in smart:
+                    lc = {"bad": VERDICT["red"], "watch": VERDICT["yellow"]}.get(row["level"], SUB)
+                    self.text(cr, row["name"], x + 40 * s, ty, 11.5 * s, lc if row["level"] != "ok" else SUB, font=MONO, width=300 * s)
+                    self.text(cr, row["value"], x + 350 * s, ty, 11.5 * s, lc if row["level"] != "ok" else FG, font=MONO)
+                    ty += 17 * s
             yy += hh * s
         self.hits.append((0, 0, W, H, "detail:close"))

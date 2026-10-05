@@ -38,7 +38,7 @@ If the PC refuses to boot the stick with a Secure Boot error:
 
 ## 3. Check the PC
 
-The easiest way: click **Chiron Doctor** in the dock (or the menu) and pick **[1] health check** (about 3 minutes, reads only), **[2] quick check**, **[3] stress test** or **[4] check + stress** (number keys, arrows + Enter, or a click). It asks for your password in the system's own window, then remembers it for a few minutes. Each check is a node in a star chart: it scans, then locks onto `[ OK ]`, `[WARN]` or `[FAIL]`, and the log at the bottom types out what was found. Click a node to see everything it found. **S** stops a test safely, and so does closing the window. At the end, **O** opens the one-page owner summary, **F** the full report, **N** starts over.
+The easiest way: click **Chiron Doctor** in the dock (or the menu) and pick **[1] health check** (about 3 minutes, reads only), **[2] quick check**, **[3] stress test** or **[4] check + stress** or **[5] disk scan** (number keys, arrows + Enter, or a click). It asks for your password in the system's own window, then remembers it for a few minutes. Each check is a node in a star chart: it scans, then locks onto `[ OK ]`, `[WARN]` or `[FAIL]`, and the log at the bottom types out what was found. Click a node to see everything it found. **S** stops a test safely, and so does closing the window. At the end, **O** opens the one-page owner summary, **F** the full report, **N** starts over.
 
 Or in a terminal:
 
@@ -46,6 +46,7 @@ Or in a terminal:
 |---|---|
 | `chiron doctor` | The Chiron Doctor window (`--demo` plays a made-up run, nothing measured) |
 | `chiron report` | Read-only health check, about 3 minutes |
+| `chiron disk-scan` | Reads 200 samples across every drive (read-only) and graphs the speed: unreadable areas mean a failing drive. About 1–2 minutes per drive |
 | `chiron full` | Report + stress tests + one combined verdict (laptop on the charger) |
 | `chiron stress --minutes 10` | Only the load tests. Ctrl-C stops them safely |
 | `chiron compare` | What changed since this PC's last check |

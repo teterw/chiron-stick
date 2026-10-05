@@ -39,6 +39,8 @@ class Run:
         self.log = []
         self.feed = []            # the log panel: (time, text, status) per line
         self.specs = None         # the spec sheet: [(section, [(label, value), …]), …]
+        self.scan = {}            # disk scan: {disk: [(position 0..1, MB/s or None, error), …]}
+        self.scan_now = {}        # the latest scan sample: disk, i, n
         self.started_at = self.ended_at = None
 
     def star(self, sid):
@@ -85,6 +87,9 @@ class Run:
             self.specs = e.get("lines") or None
             if self.specs:
                 self.say(now, f"{'Spec sheet':<15}Hardware inventory ready: press I to see it", "info")
+        elif kind == "scan":
+            self.scan.setdefault(e.get("disk", "?"), []).append((e.get("pos") or 0.0, e.get("mbps"), bool(e.get("error"))))
+            self.scan_now = {"disk": e.get("disk"), "i": e.get("i", 0), "n": e.get("n", 1)}
         elif kind == "log":
             self.log = (self.log + [e.get("text", "")])[-50:]
         elif kind == "done":
@@ -111,6 +116,8 @@ class Run:
         n = sum(1 for s in self.stars if s.status not in ("wait", "run"))
         if self.current == "cpu_load" and self.live.get("total"):
             n += min(1.0, (self.live.get("t") or 0) / self.live["total"])
+        elif self.current == "disk_scan" and self.scan_now.get("n"):
+            n += min(1.0, (self.scan_now["i"] + 1) / self.scan_now["n"])
         return n / len(self.stars)
 
     def under_load(self):
@@ -131,19 +138,25 @@ class Pacer:
 
     def __init__(self):
         self.run = Run()
-        self.queue = deque()
+        self.queue = deque()      # (event, arrival time or None)
         self.started = self.step_at = self.result_at = None
         self.hurry = False        # stopped: show everything left at once
+        self.offset = 0.0         # how far the screen is behind chiron
 
-    def push(self, e):
+    def push(self, e, at=None):
+        """at: when the event arrived. Samples (CPU ticks, disk scan) then play back with the rhythm
+        they arrived in, shifted by how far the screen is behind, instead of all at once."""
         if e.get("e") == "stopped":
             self.hurry = True
-        self.queue.append(e)
+        self.queue.append((e, at))
 
-    def due(self, e):
+    def due(self, item):
+        e, at = item
         kind = e.get("e")
-        if self.hurry or kind not in ("check", "result", "done"):
+        if self.hurry:
             return float("-inf")
+        if kind not in ("check", "result", "done"):
+            return float("-inf") if at is None else at + self.offset
         if kind == "check" and self.step_at is None:
             return (self.started if self.started is not None else float("-inf")) + self.INTRO
         scanned = (self.step_at if self.step_at is not None else float("-inf")) + self.BEAM + self.SCAN
@@ -153,7 +166,7 @@ class Pacer:
     def update(self, now):
         shown = []
         while self.queue and self.due(self.queue[0]) <= now:
-            e = self.queue.popleft()
+            e, at = self.queue.popleft()
             kind = e.get("e")
             if kind == "start":
                 self.started, self.step_at, self.result_at = now, None, None
@@ -161,6 +174,8 @@ class Pacer:
                 self.step_at, self.result_at = now, None
             elif kind == "result":
                 self.result_at = now
+            if kind in ("start", "check", "result", "done") and at is not None:
+                self.offset = max(0.0, now - at)
             self.run.apply(e, now)
             shown.append(e)
         return shown
@@ -189,7 +204,7 @@ def demo_events():
     """A scripted full check (about 20 s) for `chiron doctor --demo`: no root, nothing measured."""
     steps = [("system", "System"), ("battery", "Battery"), ("storage", "Storage"), ("memory", "Memory"),
              ("cpu", "CPU"), ("sensors", "Sensors"), ("kernel_log", "Kernel log"), ("devices", "Devices"),
-             ("diskspace", "Disk space"), ("win11", "Windows 11"), ("cpu_load", "CPU under load"),
+             ("diskspace", "Disk space"), ("win11", "Windows 11"), ("disk_scan", "Disk scan"), ("cpu_load", "CPU under load"),
              ("ram", "RAM test"), ("gpu", "Graphics test")]
     found = {"system": [("info", "Acer Aspire A515-58M · i5-13420H · 16 GB")],
              "battery": [("yellow", "holds 71% of its design capacity · 412 cycles")],
@@ -199,8 +214,14 @@ def demo_events():
              "devices": [("green", "every device has a working driver")], "diskspace": [("yellow", "Windows: 9% free (21 GB)")],
              "win11": [("green", "ready: TPM 2.0, Secure Boot, supported CPU")],
              "ram": [("green", "memtester pass, no errors")], "gpu": [("green", "Intel UHD: glmark2 score 2140")]}
+    smart = [{"name": "Current pending sectors", "value": "3", "level": "bad"},
+             {"name": "Reported uncorrectable errors", "value": "16", "level": "watch"},
+             {"name": "Reallocated sectors", "value": "0", "level": "ok"},
+             {"name": "Power-on hours", "value": "5769", "level": "ok"},
+             {"name": "Temperature", "value": "40", "level": "ok"}]
     evidence = {("battery", 0): {"manufacturer": "SMP", "model": "AP18C8K", "technology": "Li-ion", "unit": "Wh", "design": 48.0},
-                ("storage", 0): {"model": "WDC WDS240G2G0A", "size_bytes": 240_057_409_536, "class": "ssd", "transport": "sata"},
+                ("storage", 0): {"model": "WDC WDS240G2G0A", "size_bytes": 240_057_409_536, "class": "ssd", "transport": "sata",
+                                 "smart_table": smart},
                 ("storage", 1): {"model": "SAMSUNG MZVLQ512", "size_bytes": 512_110_190_592, "class": "nvme"}}
     yield 0.4, {"e": "start", "mode": "full", "machine": {"sys_vendor": "Acer", "product_name": "Aspire A515-58M"},
                 "steps": [{"id": i, "title": t} for i, t in steps], "minutes": 0.5}
@@ -220,6 +241,15 @@ def demo_events():
                            ["Camera", "ACER FHD User Facing"]]]]}
     for sid, title in steps:
         yield 0.3, {"e": "check", "id": sid}
+        if sid == "disk_scan":
+            for i in range(200):
+                mbps = 60.0 if 120 <= i < 128 else round(520 - 0.2 * i + (i * 37 % 11), 1)
+                yield 0.03, {"e": "scan", "id": "disk_scan", "disk": "sda", "i": i, "n": 200, "mbps": mbps, "error": False,
+                             "pos": i / 199}
+            yield 0.1, {"e": "result", "id": sid, "result": {"area": "disk_scan", "title": "Disk scan: WDC WDS240G2G0A (240 GB)",
+                                                            "status": "yellow", "summary": "8 of 200 areas read slowly (under 30% of the usual 480 MB/s)",
+                                                            "evidence": {"class": "ssd", "size_bytes": 240_057_409_536}}}
+            continue
         if sid == "cpu_load":
             for t in range(1, 31):
                 temp = round(48 + 38 * (1 - 0.93 ** t))

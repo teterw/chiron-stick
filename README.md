@@ -14,6 +14,7 @@ Everything Chiron Stick adds is one command, `chiron`.
 |---|---|
 | `chiron doctor` | **Chiron Doctor**: every check from one window, as a star chart that lights up green, amber or red (also in the dock and the menu) |
 | `chiron report` | Read-only health check (about 3 minutes) |
+| `chiron disk-scan` | Read samples across every drive, read-only, to find slow or unreadable areas (about 1–2 minutes per drive) |
 | `chiron stress [--minutes 10]` | Load tests with live safety limits |
 | `chiron full` | Report + stress tests + one combined verdict |
 | `chiron compare` | Compare this machine with its previous report |
